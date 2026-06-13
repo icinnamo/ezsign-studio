@@ -1,0 +1,648 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>EZ Sign 変換スタジオ</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DotGothic16&display=swap" rel="stylesheet">
+<style>
+:root{
+  --ink:#17130e;        /* 墨 */
+  --paper:#f6f1e6;      /* 電子ペーパーの白 */
+  --card:#221d16;
+  --line:#3a3328;
+  --red:#e23b2e;
+  --yellow:#f4c20d;
+  --text:#e9e2d2;
+  --dim:#9a907c;
+}
+*{box-sizing:border-box;margin:0;padding:0;-webkit-tap-highlight-color:transparent}
+html,body{background:var(--ink);color:var(--text);
+  font-family:"Hiragino Sans","Hiragino Kaku Gothic ProN",system-ui,sans-serif;
+  font-size:15px;line-height:1.6;overscroll-behavior:none}
+body{padding:14px 14px 48px;max-width:560px;margin:0 auto}
+
+/* ---------- ヘッダー ---------- */
+header{display:flex;align-items:baseline;justify-content:space-between;margin-bottom:14px}
+h1{font-family:"DotGothic16",monospace;font-size:22px;font-weight:400;letter-spacing:1px}
+.inks{display:flex;gap:5px}
+.inks i{width:13px;height:13px;border-radius:50%;border:1px solid var(--line);transition:opacity .2s}
+.inks .k{background:#000}.inks .w{background:var(--paper)}
+.inks .r{background:var(--red)}.inks .y{background:var(--yellow)}
+.inks i.off{opacity:.15}
+
+/* ---------- デバイスプレビュー ---------- */
+.device{background:#d9d4c7;border-radius:14px;padding:16px 16px 8px;
+  box-shadow:0 6px 24px rgba(0,0,0,.5), inset 0 1px 0 rgba(255,255,255,.5)}
+.screen{background:var(--paper);border:1px solid #b9b3a4;border-radius:2px;
+  overflow:hidden;position:relative;touch-action:none}
+.screen canvas{display:block;width:100%;image-rendering:pixelated}
+.screen .empty{position:absolute;inset:0;display:flex;flex-direction:column;gap:8px;
+  align-items:center;justify-content:center;color:#8a8270;
+  font-family:"DotGothic16",monospace;font-size:14px}
+.brand{font-family:"DotGothic16",monospace;font-size:10px;color:#7d7867;
+  text-align:center;padding-top:6px;letter-spacing:2px}
+.hint{font-size:12px;color:var(--dim);text-align:center;margin:8px 0 2px}
+
+/* プレビューをスクロールしても上部に固定 */
+.sticky{position:sticky;top:0;z-index:5;background:var(--ink);
+  padding:6px 0 10px;box-shadow:0 10px 14px -8px rgba(0,0,0,.6)}
+
+/* ---------- コントロール ---------- */
+section{background:var(--card);border:1px solid var(--line);border-radius:12px;
+  padding:14px;margin-top:12px}
+section h2{font-family:"DotGothic16",monospace;font-size:13px;font-weight:400;
+  color:var(--dim);letter-spacing:2px;margin-bottom:10px}
+.row{display:flex;gap:8px;align-items:center}
+.row+.row{margin-top:10px}
+
+button,select{font-family:inherit;font-size:14px;color:var(--text);
+  background:#2c2620;border:1px solid var(--line);border-radius:9px;padding:9px 12px}
+select{flex:1;appearance:none;-webkit-appearance:none}
+button:active{transform:translateY(1px)}
+
+.chips{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}
+.chip{padding:10px 4px;text-align:center;border-radius:9px;border:1px solid var(--line);
+  background:#2c2620;font-size:13px}
+.chip small{display:block;font-size:10px;color:var(--dim)}
+.chip.on{border-color:var(--yellow);background:#3a3014;color:#ffe8a3}
+.chip.on small{color:#c9a83e}
+
+.slider{margin-top:12px}
+.slider label{display:flex;justify-content:space-between;font-size:13px;color:var(--dim)}
+.slider label b{color:var(--text);font-weight:600;font-variant-numeric:tabular-nums}
+input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
+
+.seg{display:flex;border:1px solid var(--line);border-radius:9px;overflow:hidden;flex:1}
+.seg button{flex:1;border:0;border-radius:0;background:#2c2620;font-size:13px;padding:9px 2px}
+.seg button.on{background:#4a1612;color:#ffb0a6}
+.toggle.on{border-color:var(--red);background:#4a1612;color:#ffb0a6}
+
+.btn-main{width:100%;padding:14px;font-size:16px;border-radius:11px;
+  background:var(--red);border:0;color:#fff;font-weight:700;margin-top:12px}
+.btn-sub{width:100%;padding:12px;font-size:15px;border-radius:11px;margin-top:12px}
+.note{font-size:12px;color:var(--dim);margin-top:8px;text-align:center}
+#fileInput{display:none}
+</style>
+</head>
+<body>
+
+<header>
+  <h1>EZ Sign 変換スタジオ</h1>
+  <div class="inks" id="inks">
+    <i class="k"></i><i class="w"></i><i class="r" id="inkR"></i><i class="y" id="inkY"></i>
+  </div>
+</header>
+
+<!-- デバイス風プレビュー (スクロール固定) -->
+<div class="sticky">
+<div class="device">
+  <div class="screen" id="screen">
+    <canvas id="preview" width="400" height="300"></canvas>
+    <div class="empty" id="empty">
+      <span>NO IMAGE</span>
+      <span style="font-size:11px">下のボタンから写真を選んでください</span>
+    </div>
+  </div>
+  <div class="brand">SANTEK EZ SIGN</div>
+</div>
+<button class="toggle" id="simBtn" style="width:100%;margin-top:8px;font-size:13px">🖥 実機の色味で表示: OFF</button>
+</div>
+<p class="hint" id="hint">ドラッグで位置調整 / ピンチで拡大縮小</p>
+
+<button class="btn-sub" id="pickBtn">📷 写真を選ぶ</button>
+<input type="file" id="fileInput" accept="image/*">
+
+<!-- 出力先 -->
+<section>
+  <h2>出力先のEZ SIGN</h2>
+  <div class="row">
+    <select id="sizeSel">
+      <option value="400x300">4.2インチ (400×300)</option>
+      <option value="296x128">2.9インチ (296×128)</option>
+    </select>
+    <select id="colorSel">
+      <option value="4">4色 黒白赤黄</option>
+      <option value="3">3色 黒白赤</option>
+      <option value="2">2色 黒白</option>
+    </select>
+  </div>
+  <div class="row">
+    <button id="rotBtn" style="flex:1">⟳ 画像を90°回転</button>
+    <button id="resetBtn" style="flex:1">位置とズームをリセット</button>
+  </div>
+  <div class="slider">
+    <label>ズーム <b id="zoomVal">1.00x</b></label>
+    <input type="range" id="zoom" min="1" max="6" step="0.01" value="1">
+  </div>
+</section>
+
+<!-- プリセット -->
+<section>
+  <h2>プリセット</h2>
+  <div class="chips">
+    <div class="chip" data-preset="photo">photo<small>写真</small></div>
+    <div class="chip" data-preset="flat">flat<small>ベタ塗り</small></div>
+    <div class="chip" data-preset="retro">retro<small>レトロ</small></div>
+    <div class="chip" data-preset="night">night<small>夜・ムード</small></div>
+  </div>
+</section>
+
+<!-- 調整 -->
+<section>
+  <h2>調整</h2>
+  <div class="row">
+    <div class="seg" id="ditherSeg">
+      <button data-v="none">なし</button>
+      <button data-v="fs">FS</button>
+      <button data-v="atkinson" class="on">Atkinson</button>
+      <button data-v="bayer">Bayer</button>
+    </div>
+  </div>
+  <div class="row">
+    <div class="seg" id="csSeg" style="max-width:170px">
+      <button data-v="rgb" class="on">RGB判定</button>
+      <button data-v="lab">Lab判定</button>
+    </div>
+    <button class="toggle on" id="edgeBtn" style="flex:1">エッジ線 ON</button>
+  </div>
+
+  <div class="slider">
+    <label>ディザ強度 <b id="strengthVal">0.80</b></label>
+    <input type="range" id="strength" min="0" max="1" step="0.05" value="0.8">
+  </div>
+  <div class="slider">
+    <label>明るさ <b id="brightVal">0</b></label>
+    <input type="range" id="bright" min="-60" max="60" step="5" value="0">
+  </div>
+  <div class="slider">
+    <label>コントラスト <b id="contrastVal">1.00</b></label>
+    <input type="range" id="contrast" min="0.5" max="1.8" step="0.05" value="1">
+  </div>
+  <div class="slider">
+    <label>彩度 <b id="satVal">1.20</b></label>
+    <input type="range" id="sat" min="0.5" max="2" step="0.05" value="1.2">
+  </div>
+  <div class="slider">
+    <label>赤の出やすさ <b id="biasRVal">1.00</b></label>
+    <input type="range" id="biasR" min="0.5" max="1.5" step="0.05" value="1">
+  </div>
+  <div class="slider">
+    <label>黄の出やすさ <b id="biasYVal">1.00</b></label>
+    <input type="range" id="biasY" min="0.5" max="1.5" step="0.05" value="1">
+  </div>
+  <div class="slider">
+    <label>シャドウ持ち上げ (1.0=なし) <b id="gammaVal">1.00</b></label>
+    <input type="range" id="gamma" min="0.4" max="1.3" step="0.05" value="1">
+  </div>
+  <div class="slider">
+    <label>暗部の黒固定 <b id="darkVal">30</b></label>
+    <input type="range" id="dark" min="0" max="90" step="1" value="30">
+  </div>
+  <div id="edgeSliders">
+    <div class="slider">
+      <label>エッジ感度 (大=線が減る) <b id="edgeVal">150</b></label>
+      <input type="range" id="edgeTh" min="80" max="260" step="5" value="150">
+    </div>
+    <div class="slider">
+      <label>エッジ太さ <b id="edgeWVal">1.0</b></label>
+      <input type="range" id="edgeW" min="1" max="2" step="0.1" value="1">
+    </div>
+  </div>
+</section>
+
+<button class="btn-main" id="saveBtn">💾 この仕上がりで保存</button>
+<p class="note">保存画面が開いたら、画像を長押し →「写真に保存」できます</p>
+
+<!-- 保存オーバーレイ -->
+<div id="saveOverlay" style="display:none;position:fixed;inset:0;background:rgba(10,8,5,.93);
+  z-index:10;flex-direction:column;align-items:center;justify-content:center;gap:14px;padding:20px">
+  <p style="font-family:'DotGothic16',monospace;letter-spacing:1px">画像を長押し →「写真に保存」</p>
+  <img id="saveImg" style="max-width:100%;border:1px solid var(--line);border-radius:4px;
+    background:var(--paper)" alt="変換結果">
+  <button class="btn-sub" id="shareBtn" style="max-width:300px">共有シートを開く</button>
+  <button class="btn-sub" id="closeOverlay" style="max-width:300px">閉じる</button>
+</div>
+
+<script>
+"use strict";
+/* ============ パレット ============ */
+const INK = { K:[0,0,0], W:[255,255,255], R:[255,0,0], Y:[255,255,0] };
+function paletteFor(n){
+  if(n===2) return [INK.K, INK.W];
+  if(n===3) return [INK.K, INK.W, INK.R];
+  return [INK.K, INK.W, INK.R, INK.Y];
+}
+
+/* ============ 状態 ============ */
+const state = {
+  img:null, rot:0, zoom:1, cx:0.5, cy:0.5,   // cx,cy=画像内の注視点(0-1)
+  W:400, H:300, colors:4,
+  dither:"atkinson", strength:0.8, sat:1.2, gamma:1.0,
+  dark:30, edges:true, edgeTh:150, edgeW:1, cs:"rgb",
+  sim:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
+};
+
+/* ============ 色判定 ============ */
+function rgb2lab(r,g,b){
+  let sr=r/255, sg=g/255, sb=b/255;
+  sr = sr<=0.04045 ? sr/12.92 : Math.pow((sr+0.055)/1.055, 2.4);
+  sg = sg<=0.04045 ? sg/12.92 : Math.pow((sg+0.055)/1.055, 2.4);
+  sb = sb<=0.04045 ? sb/12.92 : Math.pow((sb+0.055)/1.055, 2.4);
+  let x=(sr*0.4124564+sg*0.3575761+sb*0.1804375)/0.95047;
+  let y= sr*0.2126729+sg*0.7151522+sb*0.0721750;
+  let z=(sr*0.0193339+sg*0.1191920+sb*0.9503041)/1.08883;
+  const f=t=> t>0.008856 ? Math.cbrt(t) : 7.787*t+16/116;
+  const fx=f(x), fy=f(y), fz=f(z);
+  return [116*fy-16, 500*(fx-fy), 200*(fy-fz)];
+}
+let PAL=[], PAL_LAB=[], BIASW=[1,1,1,1];
+function rebuildPalette(){
+  PAL = paletteFor(state.colors);
+  PAL_LAB = PAL.map(c=>rgb2lab(c[0],c[1],c[2]));
+}
+function nearest(r,g,b){
+  let best=0, bd=Infinity;
+  if(state.cs==="lab"){
+    const p=rgb2lab(Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b)));
+    for(let i=0;i<PAL_LAB.length;i++){
+      const q=PAL_LAB[i];
+      const d=((p[0]-q[0])**2+(p[1]-q[1])**2+(p[2]-q[2])**2)*BIASW[i];
+      if(d<bd){bd=d;best=i;}
+    }
+  }else{
+    for(let i=0;i<PAL.length;i++){
+      const q=PAL[i];
+      const d=((r-q[0])**2+(g-q[1])**2+(b-q[2])**2)*BIASW[i];
+      if(d<bd){bd=d;best=i;}
+    }
+  }
+  return PAL[best];
+}
+
+/* ============ 変換パイプライン ============ */
+const work = document.createElement("canvas");   // クロップ後の元画像
+const preview = document.getElementById("preview");
+
+function drawSource(){
+  const {img,rot,zoom,cx,cy,W,H}=state;
+  work.width=W; work.height=H;
+  const ctx=work.getContext("2d",{willReadFrequently:true});
+  ctx.fillStyle="#fff"; ctx.fillRect(0,0,W,H);
+  if(!img) return null;
+  const rw = (rot%180===0)? img.width : img.height;
+  const rh = (rot%180===0)? img.height: img.width;
+  const s = Math.max(W/rw, H/rh) * zoom;
+  ctx.save();
+  ctx.translate(W/2, H/2);
+  ctx.rotate(rot*Math.PI/180);
+  ctx.scale(s,s);
+  ctx.drawImage(img, -img.width*cx, -img.height*cy);
+  ctx.restore();
+  return ctx.getImageData(0,0,W,H);
+}
+
+function applyPre(d){ // 明るさ・コントラスト・ガンマ・彩度
+  const {sat,gamma,bright,contrast}=state;
+  const lut=new Uint8Array(256);
+  for(let i=0;i<256;i++){
+    let v=(i-128)*contrast+128+bright;          // コントラスト→明るさ
+    v=Math.max(0,Math.min(255,v));
+    lut[i]=Math.round(255*Math.pow(v/255,gamma)); // → シャドウ(ガンマ)
+  }
+  const n=d.data.length;
+  const out=new Float32Array(n/4*3);
+  for(let i=0,j=0;i<n;i+=4,j+=3){
+    let r=lut[d.data[i]], g=lut[d.data[i+1]], b=lut[d.data[i+2]];
+    const gray=0.299*r+0.587*g+0.114*b;
+    out[j]  =Math.max(0,Math.min(255, gray+(r-gray)*sat));
+    out[j+1]=Math.max(0,Math.min(255, gray+(g-gray)*sat));
+    out[j+2]=Math.max(0,Math.min(255, gray+(b-gray)*sat));
+  }
+  return out;
+}
+
+const KERNELS={
+  fs:      {k:[[0,1,7],[1,-1,3],[1,0,5],[1,1,1]], div:16},
+  atkinson:{k:[[0,1,1],[0,2,1],[1,-1,1],[1,0,1],[1,1,1],[2,0,1]], div:8},
+};
+const BAYER=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+
+function dither(buf){
+  const {W,H,dither:mode,strength,dark}=state;
+  const out=new Uint8ClampedArray(W*H*3);
+  if(mode==="none" || mode==="bayer"){
+    for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+      const j=(y*W+x)*3;
+      let r=buf[j],g=buf[j+1],b=buf[j+2];
+      const gray=0.299*r+0.587*g+0.114*b;
+      if(gray<dark){out[j]=out[j+1]=out[j+2]=0;continue;}
+      if(mode==="bayer"){
+        const t=(BAYER[y%4][x%4]/16-0.5)*strength*240;
+        r=Math.max(0,Math.min(255,r+t));
+        g=Math.max(0,Math.min(255,g+t));
+        b=Math.max(0,Math.min(255,b+t));
+      }
+      const c=nearest(r,g,b);
+      out[j]=c[0];out[j+1]=c[1];out[j+2]=c[2];
+    }
+    return out;
+  }
+  // 誤差拡散 (fs / atkinson)
+  const {k,div}=KERNELS[mode];
+  const a=Float32Array.from(buf);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const j=(y*W+x)*3;
+    const gray=0.299*a[j]+0.587*a[j+1]+0.114*a[j+2];
+    if(gray<state.dark){out[j]=out[j+1]=out[j+2]=0;continue;}
+    const or=a[j],og=a[j+1],ob=a[j+2];
+    const c=nearest(or,og,ob);
+    out[j]=c[0];out[j+1]=c[1];out[j+2]=c[2];
+    const er=(or-c[0])*strength/div, eg=(og-c[1])*strength/div, eb=(ob-c[2])*strength/div;
+    for(const [dy,dx,w] of k){
+      const ny=y+dy,nx=x+dx;
+      if(ny<H&&nx>=0&&nx<W){
+        const m=(ny*W+nx)*3;
+        a[m]+=er*w;a[m+1]+=eg*w;a[m+2]+=eb*w;
+      }
+    }
+  }
+  return out;
+}
+
+function addEdges(buf,out){ // buf=ディザ前 out=ディザ後(書き換え)
+  const {W,H,edgeTh}=state;
+  const gray=new Float32Array(W*H);
+  for(let i=0,j=0;i<W*H;i++,j+=3) gray[i]=0.299*buf[j]+0.587*buf[j+1]+0.114*buf[j+2];
+  // 積分画像で局所輝度(9x9平均)
+  const ii=new Float64Array((W+1)*(H+1));
+  for(let y=0;y<H;y++){let row=0;
+    for(let x=0;x<W;x++){row+=gray[y*W+x];
+      ii[(y+1)*(W+1)+x+1]=ii[y*(W+1)+x+1]+row;}}
+  const local=(x,y)=>{
+    const x0=Math.max(0,x-4),y0=Math.max(0,y-4),x1=Math.min(W-1,x+4),y1=Math.min(H-1,y+4);
+    const s=ii[(y1+1)*(W+1)+x1+1]-ii[y0*(W+1)+x1+1]-ii[(y1+1)*(W+1)+x0]+ii[y0*(W+1)+x0];
+    return s/((x1-x0+1)*(y1-y0+1));
+  };
+  const mag=new Float32Array(W*H);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+    const i=y*W+x;
+    const gx=-gray[i-W-1]-2*gray[i-1]-gray[i+W-1]+gray[i-W+1]+2*gray[i+1]+gray[i+W+1];
+    const gy=-gray[i-W-1]-2*gray[i-W]-gray[i-W+1]+gray[i+W-1]+2*gray[i+W]+gray[i+W+1];
+    mag[i]=Math.hypot(gx,gy);
+  }
+  // 1pxのシャープな細線 (非極大抑制) を基準にする
+  const line=new Uint8Array(W*H);
+  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+    const i=y*W+x, m=mag[i];
+    if(m<=edgeTh) continue;
+    let mx=0;
+    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++) mx=Math.max(mx,mag[i+dy*W+dx]);
+    if(m===mx && local(x,y)>=60) line[i]=1;
+  }
+  for(let i=0;i<W*H;i++) if(line[i]){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
+  // 太さ1.0超の端数分だけ、線の上下左右に点描を足して少しずつ太らせる
+  const a=state.edgeW-1;  // 0.0〜1.0
+  if(a>0){
+    for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+      const i=y*W+x;
+      if(line[i]) continue;
+      if(line[i-1]||line[i+1]||line[i-W]||line[i+W]){
+        const th=(BAYER[y%4][x%4]+0.5)/16;
+        if(a>=th){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
+      }
+    }
+  }
+}
+
+/* 純4色の保存用キャンバス (シミュ表示中でも保存はこちらから) */
+const pureCanvas=document.createElement("canvas");
+/* 実機の発色シミュレーション (表示専用) */
+const SIM={
+  [(0<<16)|(0<<8)|0]:        [46,44,40],    // 黒: ややグレー寄り
+  [(255<<16)|(255<<8)|255]:  [229,223,209], // 白: 紙っぽいオフホワイト
+  [(255<<16)|(0<<8)|0]:      [177,52,44],   // 赤: くすんだレンガ色
+  [(255<<16)|(255<<8)|0]:    [205,168,42],  // 黄: マスタード寄り
+};
+let rafId=0;
+function render(){
+  cancelAnimationFrame(rafId);
+  rafId=requestAnimationFrame(()=>{
+    if(!state.img) return;
+    BIASW=PAL.map((c,i)=> i===2 ? 1/state.biasR : i===3 ? 1/state.biasY : 1);
+    const src=drawSource();
+    const buf=applyPre(src);
+    const out=dither(buf);
+    if(state.edges) addEdges(buf,out);
+    const {W,H}=state;
+    pureCanvas.width=W; pureCanvas.height=H;
+    preview.width=W; preview.height=H;
+    const id=new ImageData(W,H);
+    for(let i=0,j=0;i<W*H;i++,j+=3){
+      id.data[i*4]=out[j];id.data[i*4+1]=out[j+1];
+      id.data[i*4+2]=out[j+2];id.data[i*4+3]=255;
+    }
+    pureCanvas.getContext("2d").putImageData(id,0,0);
+    if(state.sim){
+      const id2=new ImageData(W,H);
+      for(let i=0;i<W*H;i++){
+        const k=(id.data[i*4]<<16)|(id.data[i*4+1]<<8)|id.data[i*4+2];
+        const c=SIM[k]||[id.data[i*4],id.data[i*4+1],id.data[i*4+2]];
+        id2.data[i*4]=c[0];id2.data[i*4+1]=c[1];
+        id2.data[i*4+2]=c[2];id2.data[i*4+3]=255;
+      }
+      preview.getContext("2d").putImageData(id2,0,0);
+    }else{
+      preview.getContext("2d").putImageData(id,0,0);
+    }
+  });
+}
+
+/* ============ UI 配線 ============ */
+const $=id=>document.getElementById(id);
+
+$("pickBtn").onclick=()=>$("fileInput").click();
+$("fileInput").onchange=e=>{
+  const f=e.target.files[0]; if(!f) return;
+  const reader=new FileReader();
+  reader.onload=()=>{
+    const img=new Image();
+    img.onload=()=>{
+      state.img=img; state.rot=0; state.zoom=1; state.cx=0.5; state.cy=0.5;
+      $("empty").style.display="none";
+      $("zoom").value=1; $("zoomVal").textContent="1.00x";
+      render();
+    };
+    img.onerror=()=>{
+      alert("画像を読み込めませんでした。\nHEIC形式の可能性があります。写真アプリで一度スクリーンショットを撮るか、JPEGで書き出してから選んでください。");
+    };
+    img.src=reader.result;
+  };
+  reader.onerror=()=>alert("ファイルの読み込みに失敗しました。別の写真でお試しください。");
+  reader.readAsDataURL(f);
+  e.target.value="";  // 同じ写真を選び直しても反応するように
+};
+
+$("sizeSel").onchange=e=>{
+  const [w,h]=e.target.value.split("x").map(Number);
+  state.W=w; state.H=h; render();
+};
+$("colorSel").onchange=e=>{
+  state.colors=+e.target.value; rebuildPalette();
+  $("inkR").classList.toggle("off", state.colors<3);
+  $("inkY").classList.toggle("off", state.colors<4);
+  render();
+};
+$("rotBtn").onclick=()=>{state.rot=(state.rot+90)%360; render();};
+$("resetBtn").onclick=()=>{
+  state.zoom=1;state.cx=0.5;state.cy=0.5;
+  $("zoom").value=1;$("zoomVal").textContent="1.00x";render();
+};
+
+function bindSlider(id,key,valId,fmt){
+  $(id).oninput=e=>{
+    state[key]=+e.target.value;
+    $(valId).textContent=fmt(+e.target.value);
+    render();
+  };
+}
+bindSlider("zoom","zoom","zoomVal",v=>v.toFixed(2)+"x");
+bindSlider("strength","strength","strengthVal",v=>v.toFixed(2));
+bindSlider("sat","sat","satVal",v=>v.toFixed(2));
+bindSlider("gamma","gamma","gammaVal",v=>v.toFixed(2));
+bindSlider("dark","dark","darkVal",v=>v.toFixed(0));
+bindSlider("bright","bright","brightVal",v=>(v>0?"+":"")+v.toFixed(0));
+bindSlider("contrast","contrast","contrastVal",v=>v.toFixed(2));
+bindSlider("biasR","biasR","biasRVal",v=>v.toFixed(2));
+bindSlider("biasY","biasY","biasYVal",v=>v.toFixed(2));
+
+$("simBtn").onclick=()=>{
+  state.sim=!state.sim;
+  $("simBtn").classList.toggle("on",state.sim);
+  $("simBtn").textContent=state.sim?"🖥 実機の色味で表示: ON":"🖥 実機の色味で表示: OFF";
+  render();
+};
+bindSlider("edgeTh","edgeTh","edgeVal",v=>v.toFixed(0));
+bindSlider("edgeW","edgeW","edgeWVal",v=>v.toFixed(1));
+
+function bindSeg(id,key){
+  const seg=$(id);
+  seg.querySelectorAll("button").forEach(b=>{
+    b.onclick=()=>{
+      seg.querySelectorAll("button").forEach(x=>x.classList.remove("on"));
+      b.classList.add("on");
+      state[key]=b.dataset.v; render();
+    };
+  });
+}
+bindSeg("ditherSeg","dither");
+bindSeg("csSeg","cs");
+
+$("edgeBtn").onclick=()=>{
+  state.edges=!state.edges;
+  $("edgeBtn").classList.toggle("on",state.edges);
+  $("edgeBtn").textContent=state.edges?"エッジ線 ON":"エッジ線 OFF";
+  $("edgeSliders").style.opacity=state.edges?1:0.4;
+  render();
+};
+
+/* プリセット */
+const PRESETS={
+  photo:{dither:"atkinson",strength:0.8,sat:1.2,gamma:1.0,dark:30,edges:true, cs:"rgb"},
+  flat: {dither:"none",    strength:0.0,sat:1.1,gamma:1.0,dark:30,edges:false,cs:"rgb"},
+  retro:{dither:"bayer",   strength:0.4,sat:1.2,gamma:1.0,dark:30,edges:false,cs:"rgb"},
+  night:{dither:"fs",      strength:0.4,sat:1.5,gamma:1.0,dark:30,edges:true, cs:"rgb"},
+};
+document.querySelectorAll(".chip").forEach(ch=>{
+  ch.onclick=()=>{
+    document.querySelectorAll(".chip").forEach(x=>x.classList.remove("on"));
+    ch.classList.add("on");
+    const p=PRESETS[ch.dataset.preset];
+    Object.assign(state,p);
+    $("strength").value=p.strength;$("strengthVal").textContent=p.strength.toFixed(2);
+    $("sat").value=p.sat;$("satVal").textContent=p.sat.toFixed(2);
+    $("gamma").value=p.gamma;$("gammaVal").textContent=p.gamma.toFixed(2);
+    $("dark").value=p.dark;$("darkVal").textContent=p.dark;
+    document.querySelectorAll("#ditherSeg button").forEach(b=>
+      b.classList.toggle("on",b.dataset.v===p.dither));
+    document.querySelectorAll("#csSeg button").forEach(b=>
+      b.classList.toggle("on",b.dataset.v===p.cs));
+    state.edges=p.edges;
+    $("edgeBtn").classList.toggle("on",p.edges);
+    $("edgeBtn").textContent=p.edges?"エッジ線 ON":"エッジ線 OFF";
+    $("edgeSliders").style.opacity=p.edges?1:0.4;
+    render();
+  };
+});
+
+/* ドラッグ&ピンチ (位置・ズーム) */
+const screen=$("screen");
+const pointers=new Map();
+let pinchDist=0;
+screen.addEventListener("pointerdown",e=>{
+  screen.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    pinchDist=Math.hypot(a.x-b.x,a.y-b.y);
+  }
+});
+screen.addEventListener("pointermove",e=>{
+  if(!pointers.has(e.pointerId)||!state.img) return;
+  const prev=pointers.get(e.pointerId);
+  pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===1){
+    const dx=e.clientX-prev.x, dy=e.clientY-prev.y;
+    const dispScale=screen.clientWidth/state.W;  // CSS px → 出力px
+    const rw=(state.rot%180===0)?state.img.width:state.img.height;
+    const rh=(state.rot%180===0)?state.img.height:state.img.width;
+    const s=Math.max(state.W/rw,state.H/rh)*state.zoom*dispScale;
+    const rad=-state.rot*Math.PI/180;
+    const sx=(dx*Math.cos(rad)-dy*Math.sin(rad))/s;
+    const sy=(dx*Math.sin(rad)+dy*Math.cos(rad))/s;
+    state.cx=Math.max(0,Math.min(1,state.cx - sx/state.img.width));
+    state.cy=Math.max(0,Math.min(1,state.cy - sy/state.img.height));
+    render();
+  }else if(pointers.size===2){
+    const [a,b]=[...pointers.values()];
+    const d=Math.hypot(a.x-b.x,a.y-b.y);
+    if(pinchDist>0){
+      state.zoom=Math.max(1,Math.min(6,state.zoom*d/pinchDist));
+      $("zoom").value=state.zoom;
+      $("zoomVal").textContent=state.zoom.toFixed(2)+"x";
+      render();
+    }
+    pinchDist=d;
+  }
+});
+const endPointer=e=>{pointers.delete(e.pointerId);pinchDist=0;};
+screen.addEventListener("pointerup",endPointer);
+screen.addEventListener("pointercancel",endPointer);
+
+/* 保存: 長押し保存用のオーバーレイ表示 (iOSで最も確実な方式) */
+$("saveBtn").onclick=()=>{
+  if(!state.img){alert("先に写真を選んでください");return;}
+  $("saveImg").src=pureCanvas.toDataURL("image/png");  // シミュ表示中でも純4色で保存
+  $("saveOverlay").style.display="flex";
+};
+$("closeOverlay").onclick=()=>{$("saveOverlay").style.display="none";};
+$("shareBtn").onclick=async()=>{
+  try{
+    const res=await fetch($("saveImg").src);
+    const blob=await res.blob();
+    const name=`ezsign_${state.W}x${state.H}_${state.colors}c.png`;
+    const file=new File([blob],name,{type:"image/png"});
+    if(navigator.canShare && navigator.canShare({files:[file]})){
+      await navigator.share({files:[file]});
+    }else{
+      const a=document.createElement("a");
+      a.href=$("saveImg").src;a.download=name;a.click();
+    }
+  }catch(err){/* 共有キャンセル時は何もしない */}
+};
+
+rebuildPalette();
+</script>
+</body>
+</html>
