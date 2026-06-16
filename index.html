@@ -87,6 +87,9 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
 </style>
 </head>
 <body>
+<div id="errBox" style="display:none;position:fixed;top:0;left:0;right:0;z-index:999;
+  background:#7a1a14;color:#fff;font-size:12px;padding:10px;line-height:1.4;
+  font-family:monospace;word-break:break-all"></div>
 
 <header>
   <h1>EZ Sign 変換スタジオ</h1>
@@ -107,7 +110,10 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
   </div>
   <div class="brand">SANTEK EZ SIGN</div>
 </div>
-<button class="toggle" id="simBtn" style="width:100%;margin-top:8px;font-size:13px">🖥 実機の色味で表示: OFF</button>
+<div style="display:flex;gap:8px;margin-top:8px">
+<button class="toggle" id="simBtn" style="flex:1;font-size:13px">🖥 実機の色味: OFF</button>
+<button class="toggle" id="origBtn" style="flex:1;font-size:13px">🖼 元画像: OFF</button>
+</div>
 </div>
 <p class="hint" id="hint">ドラッグで位置調整 / ピンチで拡大縮小</p>
 
@@ -210,10 +216,87 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
       <input type="range" id="edgeW" min="1" max="2" step="0.1" value="1">
     </div>
   </div>
+
+</section>
+
+<section>
+  <h2>色変換マップ</h2>
+  <p style="font-size:12px;color:var(--dim);margin-bottom:10px">スポイトで色を選んで、出ない色(緑・青・紫など)を黒白赤黄へ変換</p>
+  <div class="row" style="margin-bottom:12px">
+    <span style="font-size:13px;color:var(--dim);flex:1">中間色のディザ方式</span>
+    <select id="midDitherSel" style="flex:1;max-width:160px">
+      <option value="checker">チェッカー(1px)</option>
+      <option value="bayer">Bayer(8x8)</option>
+      <option value="coarse">粗ドット</option>
+    </select>
+  </div>
+  <div style="border-top:1px solid var(--line);margin-top:12px;padding-top:12px">
+    <button class="toggle" id="eyeBtn" style="width:100%;margin-bottom:6px">🔍 スポイトモード: OFF</button>
+    <p style="font-size:12px;color:var(--dim)" id="eyeHint">ONにしてプレビューをタップ → 色を指定変換</p>
+    <div id="rulesList" style="margin-top:8px"></div>
+  </div>
 </section>
 
 <button class="btn-main" id="saveBtn">💾 この仕上がりで保存</button>
 <p class="note">保存画面が開いたら、画像を長押し →「写真に保存」できます</p>
+
+<div id="eyePopup" style="display:none;position:fixed;left:0;right:0;bottom:0;
+  background:rgba(20,16,11,.96);border-top:1px solid var(--line);
+  border-radius:18px 18px 0 0;box-shadow:0 -8px 30px rgba(0,0,0,.6);
+  z-index:20;flex-direction:column;align-items:center;gap:8px;padding:14px 18px 18px;
+  max-height:62vh;overflow-y:auto">
+  <div style="display:flex;align-items:center;gap:12px;width:100%;max-width:320px">
+    <div id="eyeColor" style="width:44px;height:44px;border-radius:10px;border:2px solid var(--line);flex-shrink:0"></div>
+    <div style="flex:1">
+      <p style="font-family:'DotGothic16',monospace;letter-spacing:1px;font-size:14px">変換先を選ぶ</p>
+      <p id="eyeHueLabel" style="font-size:11px;color:var(--dim)"></p>
+    </div>
+  </div>
+  <p id="eyeConflict" style="display:none;font-size:11px;color:#ffb0a6;background:#4a1612;border-radius:8px;padding:6px 8px;width:100%;max-width:320px;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></p>
+  <div class="seg" id="spoitModeSeg" style="width:100%;max-width:320px;margin-bottom:4px;flex:0 0 auto">
+    <button data-v="whole" class="on">同色全域</button>
+    <button data-v="region">選択領域</button>
+  </div>
+  <div id="rangeSliderWrap" style="width:100%;max-width:320px">
+    <div id="rangeMapWrap">
+      <label style="font-size:13px;color:var(--dim);margin-bottom:6px;display:block;text-align:center">
+        範囲マップ(タップで中心移動 / 横=色相・縦=明度)
+      </label>
+      <canvas id="rangeMap" width="280" height="160"
+        style="width:100%;border:1px solid var(--line);border-radius:10px;touch-action:none;background:#15110c"></canvas>
+    </div>
+    <div class="slider" style="margin-top:8px">
+      <label style="font-size:12px">色相の許容幅 <b id="hueWVal">±30°</b></label>
+      <input type="range" id="hueW" min="0" max="90" step="1" value="30"
+        style="width:100%;accent-color:var(--yellow);height:26px">
+    </div>
+    <div class="slider">
+      <label style="font-size:12px">明度の許容幅 <b id="lightWVal">±0.20</b></label>
+      <input type="range" id="lightW" min="0" max="0.5" step="0.01" value="0.2"
+        style="width:100%;accent-color:var(--yellow);height:26px">
+    </div>
+    <div class="slider">
+      <label style="font-size:12px">飛び地除去(小さな点/穴を整理) <b id="rMinVal">120</b></label>
+      <input type="range" id="rMin" min="0" max="800" step="20" value="120"
+        style="width:100%;accent-color:var(--yellow);height:26px">
+    </div>
+    <p id="rangeCount" style="font-size:12px;color:var(--dim);margin-top:2px;text-align:center"></p>
+  </div>
+  <div id="regionExtraWrap" style="display:none;width:100%;max-width:320px;flex:0 0 auto">
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <button id="wandUndo" class="btn-sub" style="flex:1">↩ 1つ戻す</button>
+      <button id="wandClear" class="btn-sub" style="flex:1">選択クリア</button>
+    </div>
+  </div>
+  <div id="targetSwatches" style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;width:100%;max-width:320px"></div>
+  <div style="display:flex;gap:8px;width:100%;max-width:320px;align-items:center;margin-top:2px">
+    <label style="font-size:13px;color:var(--dim);flex:1">自由に色を指定</label>
+    <input type="color" id="customColor" value="#ff8800"
+      style="width:46px;height:36px;border:1px solid var(--line);border-radius:8px;background:#2c2620;padding:2px">
+    <button class="eye-target-custom" style="padding:9px 12px;border-radius:8px;font-size:14px;background:#2c2620;border:1px solid var(--line);color:var(--text)">適用</button>
+  </div>
+  <button id="eyeCancel" class="btn-sub" style="width:100%;max-width:320px">キャンセル</button>
+</div>
 
 <!-- 保存オーバーレイ -->
 <div id="saveOverlay" style="display:none;position:fixed;inset:0;background:rgba(10,8,5,.93);
@@ -227,6 +310,19 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
 
 <script>
 "use strict";
+// --- エラー詳細を画面に表示(原因特定用) ---
+window.addEventListener("error",ev=>{
+  const box=document.getElementById("errBox");
+  if(box){
+    box.style.display="block";
+    box.textContent="エラー: "+(ev.message||"不明")
+      +" / "+(ev.filename||"")+":"+(ev.lineno||"?")+":"+(ev.colno||"?");
+  }
+});
+window.addEventListener("unhandledrejection",ev=>{
+  const box=document.getElementById("errBox");
+  if(box){box.style.display="block";box.textContent="Promiseエラー: "+(ev.reason&&ev.reason.message||ev.reason);}
+});
 /* ============ パレット ============ */
 const INK = { K:[0,0,0], W:[255,255,255], R:[255,0,0], Y:[255,255,0] };
 function paletteFor(n){
@@ -241,7 +337,19 @@ const state = {
   W:400, H:300, colors:4,
   dither:"atkinson", strength:0.8, sat:1.2, gamma:1.0,
   dark:30, edges:true, edgeTh:150, edgeW:1, cs:"rgb",
-  sim:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
+  sim:false, showOrig:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
+  remapRules:[], eyedropper:false, _preDitherBuf:null, _tapStart:null,
+  _sampledHue:0, _sampledRange:28, _rangePreview:false, _srcBuf:null,
+  spoitMode:"whole",           // "whole"=同色全域 / "region"=選択領域
+  regionMinSize:120,           // 飛び地除去のしきい値(px)
+  _wandSeeds:[],               // 領域の種 [{x,y,h,s,l},...]
+  _wandMask:null,              // 現在の選択マスク(Uint8Array)
+  _lastSeed:null,              // 直近タップ点(モード切替で使用)
+  _regionMaskPreview:false,
+  _mapX:0, _mapY:0, _sampledS:0, _sampledL:0,
+  _hueW:30, _lightW:0.2,  // 色相幅(度)・明度幅(0-1)
+  _editIndex:-1,  // -1=新規, 0以上=既存ルールの変換先を再編集
+  midDither:"checker",  // 中間色の表現方式: checker/bayer/random/coarse
 };
 
 /* ============ 色判定 ============ */
@@ -256,6 +364,20 @@ function rgb2lab(r,g,b){
   const f=t=> t>0.008856 ? Math.cbrt(t) : 7.787*t+16/116;
   const fx=f(x), fy=f(y), fz=f(z);
   return [116*fy-16, 500*(fx-fy), 200*(fy-fz)];
+}
+
+function rgb2hsl(r,g,b){
+  r/=255;g/=255;b/=255;
+  const max=Math.max(r,g,b),min=Math.min(r,g,b),d=max-min;
+  let h=0,s=0;const l=(max+min)/2;
+  if(d>0.001){
+    s=d/(1-Math.abs(2*l-1));
+    if(max===r)h=(((g-b)/d)%6+6)%6;
+    else if(max===g)h=(b-r)/d+2;
+    else h=(r-g)/d+4;
+    h*=60;
+  }
+  return[h,s,l];
 }
 let PAL=[], PAL_LAB=[], BIASW=[1,1,1,1];
 function rebuildPalette(){
@@ -328,6 +450,98 @@ const KERNELS={
   atkinson:{k:[[0,1,1],[0,2,1],[1,-1,1],[1,0,1],[1,1,1],[2,0,1]], div:8},
 };
 const BAYER=[[0,8,2,10],[12,4,14,6],[3,11,1,9],[15,7,13,5]];
+// 8x8 Bayer(64段階・実機検証で中間色に最適)
+const BAYER8=[[0,32,8,40,2,34,10,42],[48,16,56,24,50,18,58,26],
+[12,44,4,36,14,46,6,38],[60,28,52,20,62,30,54,22],
+[3,35,11,43,1,33,9,41],[51,19,59,27,49,17,57,25],
+[15,47,7,39,13,45,5,37],[63,31,55,23,61,29,53,21]];
+
+// ===== 選択領域エンジン(HSLベースの flood fill) =====
+// タップ点(種)の色相・明度から、許容幅以内でつながる隣接ピクセルを塗り広げる。
+// 複数種は和集合(union)。最後に飛び地除去(小さなゴミ消し+穴埋め)。
+// 1つの種から、色相・明度の許容幅でつながる範囲を flood fill してマスクを返す
+function floodSeedMask(sd){
+  const buf=state._srcBuf, W=state.W, H=state.H, N=W*H;
+  const mask=new Uint8Array(N);
+  const hueTol=Math.max(state._hueW,1), lightTol=Math.max(state._lightW,0.01);
+  const stack=new Int32Array(N), visited=new Uint8Array(N);
+  const sh=sd.h, sAch=(sd.s<0.12), sl=sd.l;
+  let sp=0; const start=sd.y*W+sd.x; stack[sp++]=start; visited[start]=1;
+  while(sp>0){
+    const cur=stack[--sp];
+    const hsl=rgb2hsl(buf[cur*3],buf[cur*3+1],buf[cur*3+2]);
+    const h=hsl[0], sv=hsl[1], l=hsl[2];
+    let dh=Math.abs(h-sh); if(dh>180)dh=360-dh;
+    const hueOk=(sAch||sv<0.12)?true:(dh<=hueTol);
+    if(!(hueOk && Math.abs(l-sl)<=lightTol)) continue; // 境界
+    mask[cur]=1;
+    const x=cur%W, y=(cur/W)|0;
+    if(x>0   && !visited[cur-1]){visited[cur-1]=1;stack[sp++]=cur-1;}
+    if(x<W-1 && !visited[cur+1]){visited[cur+1]=1;stack[sp++]=cur+1;}
+    if(y>0   && !visited[cur-W]){visited[cur-W]=1;stack[sp++]=cur-W;}
+    if(y<H-1 && !visited[cur+W]){visited[cur+W]=1;stack[sp++]=cur+W;}
+  }
+  return mask;
+}
+// 全部の種の和集合 + 飛び地除去
+function floodFromSeeds(){
+  if(!state._srcBuf) return;
+  const N=state.W*state.H;
+  const mask=new Uint8Array(N);
+  state._wandMask=mask;
+  if(!state._wandSeeds || !state._wandSeeds.length) return;
+  for(const sd of state._wandSeeds){ const m=floodSeedMask(sd); for(let i=0;i<N;i++) if(m[i]) mask[i]=1; }
+  despeckle(mask);
+}
+// 飛び地除去(領域選択用: 種を保護して本来の選択を守る)
+function despeckle(mask){ despeckleMask(mask, state.regionMinSize|0, true); }
+// 汎用の飛び地除去: 小さな選択ゴミを消し、内部の小さな穴を埋める。
+// 色選択(種なし)では「一番大きい塊」を保護して選択全体が消えるのを防ぐ。
+function despeckleMask(mask, minSize, protectSeeds){
+  if(minSize<=0) return;
+  removeSmallComponents(mask,1,0,minSize,false,protectSeeds,!protectSeeds); // 小さな選択ゴミ
+  removeSmallComponents(mask,0,1,minSize,true,false,false);                 // 内部の小さな穴
+}
+// mask 内で値=target の連結成分のうち minSize 未満を fillWith に置換。
+// interiorOnly=true なら画像の縁に接する成分(=背景)は対象外。
+// protectSeeds=true なら種ピクセルを含む成分は除去しない(選択を守る)。
+function removeSmallComponents(mask,target,fillWith,minSize,interiorOnly,protectSeeds,keepLargest){
+  const W=state.W,H=state.H,N=W*H;
+  let seedSet=null;
+  if(protectSeeds){ seedSet=new Set(); for(const sd of state._wandSeeds) seedSet.add(sd.y*W+sd.x); }
+  // keepLargest: 先に最大成分のサイズを調べて保護対象にする
+  let maxSize=0;
+  if(keepLargest){
+    const seen0=new Uint8Array(N), st0=new Int32Array(N);
+    for(let i0=0;i0<N;i0++){
+      if(seen0[i0]||mask[i0]!==target) continue;
+      let sp=0, cn=0; st0[sp++]=i0; seen0[i0]=1;
+      while(sp>0){ const cur=st0[--sp]; cn++; const x=cur%W, y=(cur/W)|0;
+        const nbs=[x>0?cur-1:-1, x<W-1?cur+1:-1, y>0?cur-W:-1, y<H-1?cur+W:-1];
+        for(const nx of nbs){ if(nx>=0 && !seen0[nx] && mask[nx]===target){ seen0[nx]=1; st0[sp++]=nx; } } }
+      if(cn>maxSize) maxSize=cn;
+    }
+  }
+  const seen=new Uint8Array(N), stack=new Int32Array(N), comp=new Int32Array(N);
+  for(let i0=0;i0<N;i0++){
+    if(seen[i0]||mask[i0]!==target) continue;
+    let sp=0, cn=0, border=false, hasSeed=false; stack[sp++]=i0; seen[i0]=1; comp[cn++]=i0;
+    while(sp>0){
+      const cur=stack[--sp]; const x=cur%W, y=(cur/W)|0;
+      if(x===0||y===0||x===W-1||y===H-1) border=true;
+      if(seedSet && seedSet.has(cur)) hasSeed=true;
+      const nbs=[x>0?cur-1:-1, x<W-1?cur+1:-1, y>0?cur-W:-1, y<H-1?cur+W:-1];
+      for(const nx of nbs){ if(nx>=0 && !seen[nx] && mask[nx]===target){ seen[nx]=1; stack[sp++]=nx; comp[cn++]=nx; } }
+    }
+    const isLargest = keepLargest && cn===maxSize;
+    if(cn<minSize && !(interiorOnly&&border) && !(protectSeeds&&hasSeed) && !isLargest){ for(let k=0;k<cn;k++) mask[comp[k]]=fillWith; }
+  }
+}
+// 現在のマスクの選択ピクセル数
+function wandMaskCount(){
+  if(!state._wandMask) return 0;
+  let c=0; const m=state._wandMask; for(let i=0;i<m.length;i++) c+=m[i]; return c;
+}
 
 function dither(buf){
   const {W,H,dither:mode,strength,dark}=state;
@@ -339,7 +553,7 @@ function dither(buf){
       const gray=0.299*r+0.587*g+0.114*b;
       if(gray<dark){out[j]=out[j+1]=out[j+2]=0;continue;}
       if(mode==="bayer"){
-        const t=(BAYER[y%4][x%4]/16-0.5)*strength*240;
+        const t=(BAYER8[y%8][x%8]/64-0.5)*strength*240;
         r=Math.max(0,Math.min(255,r+t));
         g=Math.max(0,Math.min(255,g+t));
         b=Math.max(0,Math.min(255,b+t));
@@ -416,6 +630,68 @@ function addEdges(buf,out){ // buf=ディザ前 out=ディザ後(書き換え)
   }
 }
 
+
+
+// 任意RGB → 最寄り2パレット色とその混合比を求める
+function mixForColor(tr,tg,tb){
+  // 各パレット色との距離で上位2つを選び、距離比で混合率を決める
+  const ds=PAL.map((c,i)=>({i,d:Math.hypot(tr-c[0],tg-c[1],tb-c[2])}));
+  ds.sort((a,b)=>a.d-b.d);
+  const a=ds[0], b=ds[1];
+  if(a.d<1) return {c1:PAL[a.i],c2:PAL[a.i],ratio:1};
+  const ratio=b.d/(a.d+b.d);
+  return {c1:PAL[a.i],c2:PAL[b.i],ratio};
+}
+function checkerPick(mix,x,y){
+  if(mix.ratio>=1) return mix.c1; // 純色
+  let th;
+  switch(state.midDither){
+    case "bayer":
+      th=(BAYER8[y%8][x%8]+0.5)/64; break;
+    case "coarse":
+      // 2x2ブロックのBayer(粗いドット)
+      th=(BAYER[(y>>1)%4][(x>>1)%4]+0.5)/16; break;
+    case "checker":
+    default:
+      return ((x+y)&1)===0 ? mix.c1 : mix.c2; // 市松は比率非依存の50:50
+  }
+  return th<mix.ratio ? mix.c1 : mix.c2;
+}
+function applyColorMap(buf){
+  if(state.remapRules.length===0) return buf;
+  const {W,H}=state;
+  const out=Float32Array.from(buf);
+  const n=W*H;
+  const judge=state._srcBuf||buf; // 色相判定は元画像基準(スポイトと一致させる)
+  // 変換先の混合をルールごとに事前計算
+  const ruleMix=state.remapRules.map(r=>r.mix);
+  for(let i=0;i<n;i++){
+    const px=i%W, py=(i/W)|0;
+    const r=Math.max(0,Math.min(255,judge[i*3]));
+    const g=Math.max(0,Math.min(255,judge[i*3+1]));
+    const b=Math.max(0,Math.min(255,judge[i*3+2]));
+    const [h,s,l]=rgb2hsl(r,g,b);
+    // スポイトルール優先(新しいルールが勝つ=後勝ち)
+    for(let ri=state.remapRules.length-1;ri>=0;ri--){
+      const rule=state.remapRules[ri];
+      let hit;
+      if(rule.mask){
+        // マスク付きルール(領域選択 / 飛び地除去ON): マスクで判定
+        hit = rule.mask[i]===1;
+      }else{
+        // 菱形判定(中心=色+マップ移動, 幅=hueW/lightW)
+        hit=diamondHit(h,s,l, rule.hue,rule.cs,rule.cl,
+                       rule.mapX,rule.mapY, rule.hueW,rule.lightW);
+      }
+      if(hit){
+        const c=checkerPick(ruleMix[ri],px,py);
+        out[i*3]=c[0];out[i*3+1]=c[1];out[i*3+2]=c[2];
+        break;
+      }
+    }
+  }
+  return out;
+}
 /* 純4色の保存用キャンバス (シミュ表示中でも保存はこちらから) */
 const pureCanvas=document.createElement("canvas");
 /* 実機の発色シミュレーション (表示専用) */
@@ -432,8 +708,14 @@ function render(){
     if(!state.img) return;
     BIASW=PAL.map((c,i)=> i===2 ? 1/state.biasR : i===3 ? 1/state.biasY : 1);
     const src=drawSource();
+    // スポイト用に補正前の元画像(RGB)を保持
+    {const sb=new Float32Array(state.W*state.H*3);
+     for(let i=0,j=0;i<src.data.length;i+=4,j+=3){sb[j]=src.data[i];sb[j+1]=src.data[i+1];sb[j+2]=src.data[i+2];}
+     state._srcBuf=sb;}
     const buf=applyPre(src);
-    const out=dither(buf);
+    state._preDitherBuf=buf;
+    const mapped=applyColorMap(buf);
+    const out=dither(mapped);
     if(state.edges) addEdges(buf,out);
     const {W,H}=state;
     pureCanvas.width=W; pureCanvas.height=H;
@@ -444,7 +726,12 @@ function render(){
       id.data[i*4+2]=out[j+2];id.data[i*4+3]=255;
     }
     pureCanvas.getContext("2d").putImageData(id,0,0);
-    if(state.sim){
+    if(state.showOrig){
+      // 元画像表示: 補正前の元画像(_srcBuf)を出す(simがONでも元画像を優先)
+      const oid=new ImageData(W,H), sb=state._srcBuf;
+      for(let i=0;i<W*H;i++){ oid.data[i*4]=sb[i*3]; oid.data[i*4+1]=sb[i*3+1]; oid.data[i*4+2]=sb[i*3+2]; oid.data[i*4+3]=255; }
+      preview.getContext("2d").putImageData(oid,0,0);
+    }else if(state.sim){
       const id2=new ImageData(W,H);
       for(let i=0;i<W*H;i++){
         const k=(id.data[i*4]<<16)|(id.data[i*4+1]<<8)|id.data[i*4+2];
@@ -459,6 +746,330 @@ function render(){
   });
 }
 
+// 変換先プリセット(純色 + チェッカー中間色)
+const K=[0,0,0],WH=[255,255,255],RD=[255,0,0],YL=[255,255,0];
+// mix形式: {c1,c2,ratio} ratioはc1の割合。純色はc1=c2。
+const mk=(c1,c2,ratio)=>({c1,c2,ratio});
+const TARGET_PRESETS=[
+  {name:"黒",     mix:mk(K,K,1)},
+  {name:"白",     mix:mk(WH,WH,1)},
+  {name:"赤",     mix:mk(RD,RD,1)},
+  {name:"黄",     mix:mk(YL,YL,1)},
+  {name:"オレンジ", mix:mk(RD,YL,0.5)},
+  {name:"黄緑",   mix:mk(YL,K,0.55)},
+  {name:"ピンク", mix:mk(RD,WH,0.45)},
+  {name:"グレー", mix:mk(K,WH,0.5)},
+  {name:"濃い赤", mix:mk(RD,K,0.6)},
+  {name:"クリーム", mix:mk(YL,WH,0.5)},
+];
+// mixを代表RGB(プレビュー表示用)に変換
+function mixToRgb(m){
+  return [
+    Math.round(m.c1[0]*m.ratio+m.c2[0]*(1-m.ratio)),
+    Math.round(m.c1[1]*m.ratio+m.c2[1]*(1-m.ratio)),
+    Math.round(m.c1[2]*m.ratio+m.c2[2]*(1-m.ratio)),
+  ];
+}
+function swatchCss(m){
+  const [r,g,b]=mixToRgb(m);
+  return `rgb(${r},${g},${b})`;
+}
+function buildTargetSwatches(){
+  const box=$("targetSwatches"); box.innerHTML="";
+  TARGET_PRESETS.forEach(p=>{
+    const btn=document.createElement("button");
+    const rgb=mixToRgb(p.mix);
+    const lum=rgb[0]*0.299+rgb[1]*0.587+rgb[2]*0.114;
+    btn.style.cssText=`background:${swatchCss(p.mix)};color:${lum<140?'#fff':'#000'};padding:12px 4px;border-radius:9px;font-size:12px;border:1px solid var(--line)`;
+    btn.textContent=p.name;
+    btn.onclick=()=>commitColor(p.mix,p.name);
+    box.appendChild(btn);
+  });
+}
+// 変換先を確定(新規追加 or 既存の変換先だけ差し替え)
+function commitColor(mix,name){
+  // 領域選択中なら領域ルール、それ以外は色ルール
+  if(state.spoitMode==="region" && wandMaskCount()>0){
+    commitRegion(mix,name);
+  }else{
+    commitTarget(mix,name);
+  }
+}
+function commitTarget(mix,name){
+  const minSize=state.regionMinSize|0;
+  // 飛び地除去ON時は同色全域の判定マスクを焼き込む(点/穴を整理した形で確定)
+  let mask=null;
+  if(minSize>0 && state._srcBuf){
+    const W=state.W,H=state.H,N=W*H,buf=state._srcBuf;
+    mask=new Uint8Array(N);
+    for(let i=0;i<N;i++){
+      const r=Math.max(0,Math.min(255,buf[i*3]));
+      const g=Math.max(0,Math.min(255,buf[i*3+1]));
+      const b=Math.max(0,Math.min(255,buf[i*3+2]));
+      const hsl=rgb2hsl(r,g,b);
+      if(diamondHit(hsl[0],hsl[1],hsl[2], state._sampledHue,state._sampledS,state._sampledL, state._mapX,state._mapY, state._hueW,state._lightW)) mask[i]=1;
+    }
+    despeckleMask(mask, minSize, false);
+  }
+  if(state._editIndex>=0){
+    const rule=state.remapRules[state._editIndex];
+    rule.mix=mix; rule.targetName=name;
+    rule.hue=state._sampledHue; rule.cs=state._sampledS; rule.cl=state._sampledL;
+    rule.mapX=state._mapX; rule.mapY=state._mapY; rule.hueW=state._hueW; rule.lightW=state._lightW;
+    rule.minSize=minSize; rule.mask=mask; rule.region=false;
+  }else{
+    state.remapRules.push({
+      hue:state._sampledHue, cs:state._sampledS, cl:state._sampledL,
+      mapX:state._mapX, mapY:state._mapY, hueW:state._hueW, lightW:state._lightW,
+      minSize:minSize, mask:mask,
+      mix:mix, targetName:name,
+    });
+  }
+  state._editIndex=-1;
+  state._rangePreview=false;
+  updateRulesList();
+  $("eyePopup").style.display="none";
+  render();
+}
+
+// ===== 領域選択 =====
+// タップ座標→出力ピクセル座標(クロップ/ズーム/回転を考慮)
+function clientToPixel(cx,cy){
+  const rect=$("screen").getBoundingClientRect();
+  const x=Math.floor((cx-rect.left)/rect.width*state.W);
+  const y=Math.floor((cy-rect.top)/rect.height*state.H);
+  if(x<0||x>=state.W||y<0||y>=state.H) return null;
+  return [x,y];
+}
+function tapRegion(cx,cy){
+  if(!state._srcBuf||!state.img) return;
+  const p=clientToPixel(cx,cy); if(!p) return;
+  const W=state.W;
+  const i=(p[1]*W+p[0])*3;
+  const r=state._srcBuf[i], g=state._srcBuf[i+1], b=state._srcBuf[i+2];
+  const [h,s,l]=rgb2hsl(Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b)));
+  state._lastSeed={x:p[0], y:p[1], h, s, l};
+  if(!state._wandSeeds) state._wandSeeds=[];
+  // すでに選択済みの所をタップ → その塊を取り消し / それ以外 → 追加
+  if(state._wandMask && state._wandMask[p[1]*W+p[0]]===1){
+    removeSeedAt(p[0],p[1]);
+  }else{
+    state._wandSeeds.push({x:p[0], y:p[1], h, s, l});
+  }
+  floodFromSeeds();
+  state._regionMaskPreview=true;
+  renderRegionPreview();
+  state._editIndex=-1;
+  $("eyeColor").style.background=`rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+  $("eyeHueLabel").textContent=`選択領域: ${state._wandSeeds.length}点 / 色相±${Math.round(state._hueW)}° 明度±${state._lightW.toFixed(2)}`;
+  $("eyeConflict").style.display="none";
+  $("rangeSliderWrap").style.display="block";
+  syncSpoitUI();
+  $("eyePopup").style.display="flex";
+}
+// (x,y)を選択した種を1つだけ取り除く(その選択領域だけを解除。他は残す)
+function removeSeedAt(x,y){
+  const W=state.W;
+  for(let k=state._wandSeeds.length-1;k>=0;k--){
+    const m=floodSeedMask(state._wandSeeds[k]);
+    if(m[y*W+x]===1){ state._wandSeeds.splice(k,1); return true; }
+  }
+  return false;
+}
+// ポップアップのモード別UI表示を同期
+function syncSpoitUI(){
+  const region = state.spoitMode==="region";
+  document.querySelectorAll("#spoitModeSeg button").forEach(x=>x.classList.toggle("on", x.dataset.v===state.spoitMode));
+  const mw=$("rangeMapWrap"); if(mw) mw.style.display = region?"none":"block";
+  const re=$("regionExtraWrap"); if(re) re.style.display = region?"block":"none";
+  $("eyeColor").style.display="";
+}
+// 選択領域をハイライト表示(対象=明るく、その他=暗く)
+function renderRegionPreview(){
+  if(!state._wandMask||!state._srcBuf) return;
+  const {W,H}=state, buf=state._srcBuf, m=state._wandMask;
+  preview.width=W; preview.height=H;
+  const id=new ImageData(W,H);
+  let count=0;
+  for(let i=0;i<W*H;i++){
+    const r=buf[i*3],g=buf[i*3+1],b=buf[i*3+2];
+    if(m[i]){id.data[i*4]=Math.min(255,r*1.3);id.data[i*4+1]=Math.min(255,g*1.3);id.data[i*4+2]=Math.min(255,b*1.3);count++;}
+    else{id.data[i*4]=r*0.25;id.data[i*4+1]=g*0.25;id.data[i*4+2]=b*0.25;}
+    id.data[i*4+3]=255;
+  }
+  preview.getContext("2d").putImageData(id,0,0);
+  const el=$("rangeCount"); if(el) el.textContent=`選択範囲: 約 ${Math.round(count/(W*H)*100)}% (${count}px)`;
+}
+// 選択マスクからルール登録
+function commitRegion(mix,name){
+  if(wandMaskCount()===0) return;
+  const ruleObj={region:true, mask:state._wandMask, mix, targetName:name+"(領域)",
+    seeds:state._wandSeeds.map(sd=>({x:sd.x,y:sd.y,h:sd.h,s:sd.s,l:sd.l})),
+    hueW:state._hueW, lightW:state._lightW, minSize:state.regionMinSize|0};
+  if(state._editIndex>=0 && state.remapRules[state._editIndex] && state.remapRules[state._editIndex].region){
+    state.remapRules[state._editIndex]=ruleObj; // 再編集: 同じ位置を置き換え
+  }else{
+    state.remapRules.push(ruleObj);
+  }
+  state._editIndex=-1;
+  state._wandSeeds=[]; state._wandMask=null;
+  state._regionMaskPreview=false;
+  state._lastSeed=null;
+  $("regionExtraWrap").style.display="none";
+  updateRulesList();
+  $("eyePopup").style.display="none";
+  render();
+}
+function diamondHit(h,s,l, h0,s0,l0, mapX,mapY, hueW,lightW){
+  const hCenter=((h0 + mapX*180)%360+360)%360;
+  const lCenter=Math.min(1,Math.max(0, l0 + mapY*0.5));
+  let dh=Math.abs(h-hCenter); if(dh>180)dh=360-dh;
+  const dl=Math.abs(l-lCenter);
+  const hw=Math.max(hueW,1), lw=Math.max(lightW,0.02);
+  const hueTerm=(s<0.12||s0<0.12)?0:dh/hw; // 無彩色は色相無視
+  return (hueTerm + dl/lw) <= 1.0;
+}
+function inMapRange(h,s,l){
+  return diamondHit(h,s,l, state._sampledHue,state._sampledS,state._sampledL,
+                    state._mapX,state._mapY, state._hueW,state._lightW);
+}
+
+function sampleColor(cx,cy){
+  if(!state._srcBuf||!state.img) return;
+  const rect=screen.getBoundingClientRect();
+  const px=Math.floor((cx-rect.left)/rect.width*state.W);
+  const py=Math.floor((cy-rect.top)/rect.height*state.H);
+  if(px<0||px>=state.W||py<0||py>=state.H) return;
+  const i=(py*state.W+px)*3;
+  const r=state._srcBuf[i],g=state._srcBuf[i+1],b=state._srcBuf[i+2];
+  const [h,s,l]=rgb2hsl(Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b)));
+  // 無彩色(彩度が低い)は色相ではなく明度帯で扱う
+  state._sampledHue=h;
+  state._sampledS=s;
+  state._sampledL=l;
+  state._sampledAchroma = s<0.12;
+  state._lastSeed={x:px, y:py, h, s, l};
+  state._mapX=0; state._mapY=0;  // 中心移動はリセット(幅スライダーは維持)
+  $("eyeColor").style.background=`rgb(${Math.round(r)},${Math.round(g)},${Math.round(b)})`;
+  $("eyeHueLabel").textContent = state._sampledAchroma
+    ? `無彩色 (明度 ${Math.round(l*100)}%) を中心に調整`
+    : `色相 ${Math.round(h)}°  明度 ${Math.round(l*100)}%  を中心に調整`;
+  // 既存ルールとの色相重なりをチェック(無彩色サンプル時はスキップ)
+  let conflict=null;
+  if(!state._sampledAchroma){
+    for(const rule of state.remapRules){
+      if(rule.cs<0.12) continue; // 無彩色中心のルールは色相比較しない
+      let dh=Math.abs(h-rule.hue);if(dh>180)dh=360-dh;
+      const rRange=Math.abs(rule.mapX)*90+5;
+      if(dh<=rRange+28){conflict=rule;break;}
+    }
+  }
+  const warnEl=$("eyeConflict");
+  if(conflict){
+    warnEl.textContent=`⚠ 既存ルール(${conflict.targetName})と範囲が重複。確定でこちらが優先`;
+    warnEl.style.display="block";
+  }else{
+    warnEl.style.display="none";
+  }
+  state._rangePreview=true;
+  $("rangeSliderWrap").style.display="block"; // マップは無彩色でも使う
+  syncSpoitUI();
+  $("eyePopup").style.display="flex";
+  drawRangeMap();
+  renderRangeHighlight();
+}
+
+// 範囲マップの描画(中心移動 + 菱形)
+function drawRangeMap(){
+  const cv=$("rangeMap"); if(!cv) return;
+  const ctx=cv.getContext("2d");
+  const W=cv.width,H=cv.height;
+  ctx.clearRect(0,0,W,H);
+  const cx=W/2, cy=H/2;
+  const h0=state._sampledHue, s0=state._sampledS, l0=state._sampledL;
+  // グリッド
+  ctx.strokeStyle="#3a3328"; ctx.lineWidth=1;
+  ctx.beginPath();
+  ctx.moveTo(cx,0);ctx.lineTo(cx,H);
+  ctx.moveTo(0,cy);ctx.lineTo(W,cy);
+  ctx.stroke();
+  ctx.fillStyle="#6f6857"; ctx.font="10px sans-serif"; ctx.textAlign="center";
+  ctx.fillText("明るい",cx,12); ctx.fillText("暗い",cx,H-5);
+  ctx.textAlign="left"; ctx.fillText("色相-",4,cy-5);
+  ctx.textAlign="right"; ctx.fillText("色相+",W-4,cy-5);
+  // 元の色(原点)
+  ctx.fillStyle=`hsl(${h0},${Math.round(Math.max(s0,0.15)*100)}%,${Math.round(l0*100)}%)`;
+  ctx.strokeStyle="#777"; ctx.lineWidth=1;
+  ctx.beginPath(); ctx.arc(cx,cy,5,0,Math.PI*2); ctx.fill(); ctx.stroke();
+  // 中心位置(マップ移動後)
+  const px=cx+state._mapX*(W/2-10);
+  const py=cy-state._mapY*(H/2-10);
+  // 菱形(色相幅=横, 明度幅=縦)を中心位置に描く
+  const rxW=(state._hueW/90)*(W/2-10)+2;   // 横スケール(色相)
+  const ryH=(state._lightW/0.5)*(H/2-10)+2; // 縦スケール(明度)
+  ctx.strokeStyle="rgba(244,194,13,.85)"; ctx.lineWidth=2;
+  ctx.beginPath();
+  ctx.moveTo(px, py-ryH);
+  ctx.lineTo(px+rxW, py);
+  ctx.lineTo(px, py+ryH);
+  ctx.lineTo(px-rxW, py);
+  ctx.closePath();
+  ctx.stroke();
+  // 中心ハンドル
+  ctx.fillStyle="#f4c20d"; ctx.strokeStyle="#15110c"; ctx.lineWidth=2;
+  ctx.beginPath(); ctx.arc(px,py,7,0,Math.PI*2); ctx.fill(); ctx.stroke();
+}
+
+// マップ操作(タップ/ドラッグで mapX,mapY 更新)
+function bindRangeMap(){
+  const cv=$("rangeMap"); if(!cv) return;
+  let dragging=false;
+  const update=e=>{
+    const rect=cv.getBoundingClientRect();
+    const t=e.touches?e.touches[0]:e;
+    let nx=((t.clientX-rect.left)/rect.width)*2-1;
+    let ny=-(((t.clientY-rect.top)/rect.height)*2-1);
+    state._mapX=Math.max(-1,Math.min(1,nx));
+    state._mapY=Math.max(-1,Math.min(1,ny));
+    if(state._editIndex>=0){
+      state.remapRules[state._editIndex].mapX=state._mapX;
+      state.remapRules[state._editIndex].mapY=state._mapY;
+    }
+    drawRangeMap();
+    renderRangeHighlight();
+  };
+  cv.addEventListener("pointerdown",e=>{dragging=true;cv.setPointerCapture(e.pointerId);update(e);});
+  cv.addEventListener("pointermove",e=>{if(dragging)update(e);});
+  cv.addEventListener("pointerup",()=>{dragging=false;});
+  cv.addEventListener("pointercancel",()=>{dragging=false;});
+}
+
+function renderRangeHighlight(){
+  if(!state._srcBuf) return;
+  const {W,H}=state, buf=state._srcBuf, N=W*H;
+  const hit=new Uint8Array(N);
+  for(let i=0;i<N;i++){
+    const r=Math.max(0,Math.min(255,buf[i*3]));
+    const g=Math.max(0,Math.min(255,buf[i*3+1]));
+    const b=Math.max(0,Math.min(255,buf[i*3+2]));
+    const hsl=rgb2hsl(r,g,b);
+    if(inMapRange(hsl[0],hsl[1],hsl[2])) hit[i]=1;
+  }
+  if((state.regionMinSize|0)>0) despeckleMask(hit, state.regionMinSize|0, false); // 同色全域でも飛び地除去
+  const id=new ImageData(W,H);
+  let count=0;
+  for(let i=0;i<N;i++){
+    const r=buf[i*3],g=buf[i*3+1],b=buf[i*3+2];
+    if(hit[i]){ id.data[i*4]=Math.min(255,r*1.3); id.data[i*4+1]=Math.min(255,g*1.3); id.data[i*4+2]=Math.min(255,b*1.3); count++; }
+    else { id.data[i*4]=r*0.25; id.data[i*4+1]=g*0.25; id.data[i*4+2]=b*0.25; }
+    id.data[i*4+3]=255;
+  }
+  preview.width=W; preview.height=H;
+  preview.getContext("2d").putImageData(id,0,0);
+  const el=$("rangeCount");
+  if(el) el.textContent=`影響範囲: 約 ${Math.round(count/N*100)}% (${count}px)`;
+}
+
 /* ============ UI 配線 ============ */
 const $=id=>document.getElementById(id);
 
@@ -470,6 +1081,7 @@ $("fileInput").onchange=e=>{
     const img=new Image();
     img.onload=()=>{
       state.img=img; state.rot=0; state.zoom=1; state.cx=0.5; state.cy=0.5;
+      state._wandSeeds=[]; state._wandMask=null; // 領域選択はリセット
       $("empty").style.display="none";
       $("zoom").value=1; $("zoomVal").textContent="1.00x";
       render();
@@ -517,10 +1129,18 @@ bindSlider("contrast","contrast","contrastVal",v=>v.toFixed(2));
 bindSlider("biasR","biasR","biasRVal",v=>v.toFixed(2));
 bindSlider("biasY","biasY","biasYVal",v=>v.toFixed(2));
 
+$("midDitherSel").onchange=e=>{state.midDither=e.target.value;render();};
+
 $("simBtn").onclick=()=>{
   state.sim=!state.sim;
   $("simBtn").classList.toggle("on",state.sim);
-  $("simBtn").textContent=state.sim?"🖥 実機の色味で表示: ON":"🖥 実機の色味で表示: OFF";
+  $("simBtn").textContent=state.sim?"🖥 実機の色味: ON":"🖥 実機の色味: OFF";
+  render();
+};
+$("origBtn").onclick=()=>{
+  state.showOrig=!state.showOrig;
+  $("origBtn").classList.toggle("on",state.showOrig);
+  $("origBtn").textContent=state.showOrig?"🖼 元画像: ON":"🖼 元画像: OFF";
   render();
 };
 bindSlider("edgeTh","edgeTh","edgeVal",v=>v.toFixed(0));
@@ -583,6 +1203,7 @@ let pinchDist=0;
 screen.addEventListener("pointerdown",e=>{
   screen.setPointerCapture(e.pointerId);
   pointers.set(e.pointerId,{x:e.clientX,y:e.clientY});
+  if(pointers.size===1) state._tapStart={x:e.clientX,y:e.clientY};
   if(pointers.size===2){
     const [a,b]=[...pointers.values()];
     pinchDist=Math.hypot(a.x-b.x,a.y-b.y);
@@ -616,9 +1237,18 @@ screen.addEventListener("pointermove",e=>{
     pinchDist=d;
   }
 });
-const endPointer=e=>{pointers.delete(e.pointerId);pinchDist=0;};
-screen.addEventListener("pointerup",endPointer);
-screen.addEventListener("pointercancel",endPointer);
+screen.addEventListener("pointerup",e=>{
+  const wasOne=pointers.size===1;
+  pointers.delete(e.pointerId);pinchDist=0;
+  if(state.eyedropper&&wasOne&&state._tapStart){
+    const dx=e.clientX-state._tapStart.x,dy=e.clientY-state._tapStart.y;
+    if(Math.hypot(dx,dy)<10){
+      if(state.spoitMode==="region") tapRegion(e.clientX,e.clientY);
+      else sampleColor(e.clientX,e.clientY);
+    }
+  }
+});
+screen.addEventListener("pointercancel",e=>{pointers.delete(e.pointerId);pinchDist=0;});
 
 /* 保存: 長押し保存用のオーバーレイ表示 (iOSで最も確実な方式) */
 $("saveBtn").onclick=()=>{
@@ -641,6 +1271,150 @@ $("shareBtn").onclick=async()=>{
     }
   }catch(err){/* 共有キャンセル時は何もしない */}
 };
+
+function updateRulesList(){
+  const list=$("rulesList");
+  if(!state.remapRules.length){list.innerHTML="";return;}
+  list.innerHTML=state.remapRules.map((r,i)=>{
+    const rgb=mixToRgb(r.mix);
+    const bg=`rgb(${rgb.join(",")})`;
+    const tc=rgb[0]+rgb[1]+rgb[2]<400?"#fff":"#000";
+    const isRg = !!r.region;
+    const dotBg = isRg ? bg : `hsl(${r.hue},${Math.round((r.cs||0)*70+10)}%,${Math.round((r.cl||0.5)*100)}%)`;
+    const tidy = (r.minSize|0)>0 ? " ✚整理" : "";
+    const label = (isRg ? `領域選択` : `色相±${Math.round(r.hueW)}° 明度±${(r.lightW||0).toFixed(2)}`) + tidy;
+    const targetBtn = `<button onclick="editRule(${i})" style="padding:3px 10px;border-radius:6px;font-size:12px;background:${bg};color:${tc};border:1px solid var(--line)">${r.targetName} ✎</button>`;
+    return `<div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+      <span style="width:13px;height:13px;border-radius:50%;flex-shrink:0;border:1px solid var(--line);background:${dotBg}"></span>
+      <span style="font-size:12px;flex:1">${label}</span>
+      ${targetBtn}
+      <button onclick="removeRule(${i})" style="padding:3px 8px;font-size:13px;border-radius:6px;background:#2c2620;border:1px solid var(--line);color:var(--text)">×</button>
+    </div>`;
+  }).join("");
+}
+window.removeRule=i=>{state.remapRules.splice(i,1);updateRulesList();render();};
+// 変換先だけ再編集: ポップアップを「変換先選択のみ」モードで開く
+window.editRule=i=>{
+  const r=state.remapRules[i];
+  state._editIndex=i;
+  if(r.region){
+    // 領域ルールの再編集: 種とスライダーを復元して選び直せる
+    state.spoitMode="region";
+    state._wandSeeds=(r.seeds||[]).map(sd=>({x:sd.x,y:sd.y,h:sd.h,s:sd.s,l:sd.l}));
+    state._hueW=(r.hueW!=null)?r.hueW:30; state._lightW=(r.lightW!=null)?r.lightW:0.2;
+    state.regionMinSize=r.minSize|0;
+    state._lastSeed=state._wandSeeds.length?state._wandSeeds[state._wandSeeds.length-1]:null;
+    $("hueW").value=state._hueW; $("hueWVal").textContent=`±${Math.round(state._hueW)}°`;
+    $("lightW").value=state._lightW; $("lightWVal").textContent=`±${state._lightW.toFixed(2)}`;
+    $("rMin").value=state.regionMinSize; $("rMinVal").textContent=state.regionMinSize;
+    floodFromSeeds(); renderRegionPreview();
+    $("eyeHueLabel").textContent=`領域ルールを再編集中: ${state._wandSeeds.length}点`;
+    $("eyeConflict").style.display="none";
+    $("rangeSliderWrap").style.display="block";
+    syncSpoitUI();
+    $("eyePopup").style.display="flex";
+    return;
+  }
+  state.spoitMode="whole";
+  state._rangePreview=true;
+  state._sampledHue=r.hue;
+  state._sampledS=r.cs;
+  state._sampledL=r.cl;
+  state._sampledAchroma=r.cs<0.12;
+  state._mapX=r.mapX; state._mapY=r.mapY;
+  state._hueW=r.hueW; state._lightW=r.lightW;
+  state.regionMinSize=r.minSize|0;
+  state._lastSeed={x:0,y:0,h:r.hue,s:r.cs,l:r.cl};
+  $("hueW").value=r.hueW; $("hueWVal").textContent=`±${Math.round(r.hueW)}°`;
+  $("lightW").value=r.lightW; $("lightWVal").textContent=`±${r.lightW.toFixed(2)}`;
+  $("rMin").value=state.regionMinSize; $("rMinVal").textContent=state.regionMinSize;
+  $("eyeColor").style.background=`hsl(${r.hue},${Math.round(r.cs*100)}%,${Math.round(r.cl*100)}%)`;
+  $("eyeHueLabel").textContent=`このルールの範囲・変換先を変更`;
+  $("rangeSliderWrap").style.display="block";
+  $("eyeConflict").style.display="none";
+  syncSpoitUI();
+  $("eyePopup").style.display="flex";
+  drawRangeMap();
+  renderRangeHighlight();
+};
+
+$("eyeBtn").onclick=()=>{
+  state.eyedropper=!state.eyedropper;
+  $("eyeBtn").classList.toggle("on",state.eyedropper);
+  $("eyeBtn").textContent=state.eyedropper
+    ?"🔍 スポイトモード: ON (プレビューをタップ)"
+    :"🔍 スポイトモード: OFF";
+  $("screen").style.cursor=state.eyedropper?"crosshair":"";
+};
+// スポイト後のトグル: 同色全域 / 選択領域
+document.querySelectorAll("#spoitModeSeg button").forEach(b=>{
+  b.onclick=()=>{
+    state.spoitMode=b.dataset.v;
+    syncSpoitUI();
+    if(state.spoitMode==="region"){
+      if(state._lastSeed){
+        const ls=state._lastSeed;
+        state._wandSeeds=[{x:ls.x,y:ls.y,h:ls.h,s:ls.s,l:ls.l}];
+        floodFromSeeds(); renderRegionPreview();
+        $("eyeHueLabel").textContent=`選択領域: ${state._wandSeeds.length}点 / 色相±${Math.round(state._hueW)}° 明度±${state._lightW.toFixed(2)}`;
+      }else{
+        $("eyeHueLabel").textContent=`タップで領域を選んでください`;
+      }
+    }else{
+      if(state._lastSeed){
+        const ls=state._lastSeed;
+        state._sampledHue=ls.h; state._sampledS=ls.s; state._sampledL=ls.l;
+        state._sampledAchroma=ls.s<0.12; state._mapX=0; state._mapY=0;
+      }
+      drawRangeMap(); renderRangeHighlight();
+      $("eyeHueLabel").textContent = state._sampledAchroma
+        ? `無彩色 (明度 ${Math.round(state._sampledL*100)}%) を中心に調整`
+        : `色相 ${Math.round(state._sampledHue)}°  明度 ${Math.round(state._sampledL*100)}%  を中心に調整`;
+    }
+  };
+});
+// 飛び地除去スライダー(両モード共通)
+$("rMin").oninput=e=>{
+  state.regionMinSize=+e.target.value; $("rMinVal").textContent=e.target.value;
+  if(state.spoitMode==="region"){ if(state._wandSeeds.length){ floodFromSeeds(); renderRegionPreview(); } }
+  else { if(state._rangePreview) renderRangeHighlight(); }
+};
+// 1つ戻す: 直前に追加した種を取り消し
+$("wandUndo").onclick=()=>{
+  if(state._wandSeeds && state._wandSeeds.length){
+    state._wandSeeds.pop(); floodFromSeeds(); renderRegionPreview();
+  }
+  $("eyeHueLabel").textContent=`選択領域: ${state._wandSeeds.length}点 / 色相±${Math.round(state._hueW)}° 明度±${state._lightW.toFixed(2)}`;
+};
+// 選択クリア: 種を全部消す(ポップアップは開いたまま)
+$("wandClear").onclick=()=>{
+  state._wandSeeds=[]; state._wandMask=null; state._regionMaskPreview=false;
+  render();
+  $("eyeHueLabel").textContent=`タップで領域を選んでください`;
+  const el=$("rangeCount"); if(el) el.textContent="";
+};
+$("eyeCancel").onclick=()=>{state._editIndex=-1;state._rangePreview=false;state._wandSeeds=[];state._wandMask=null;state._regionMaskPreview=false;state._lastSeed=null;$("regionExtraWrap").style.display="none";$("eyeColor").style.display="";$("eyePopup").style.display="none";render();};
+document.querySelector(".eye-target-custom").onclick=()=>{
+  const hex=$("customColor").value;
+  const rgb=[parseInt(hex.slice(1,3),16),parseInt(hex.slice(3,5),16),parseInt(hex.slice(5,7),16)];
+  commitColor(mixForColor(rgb[0],rgb[1],rgb[2]),"指定色");
+};
+$("hueW").oninput=e=>{
+  state._hueW=+e.target.value;
+  $("hueWVal").textContent=`±${e.target.value}°`;
+  if(state._editIndex>=0) state.remapRules[state._editIndex].hueW=+e.target.value;
+  if(state.spoitMode==="region" && state._wandSeeds.length){ floodFromSeeds(); renderRegionPreview(); }
+  else { drawRangeMap(); renderRangeHighlight(); }
+};
+$("lightW").oninput=e=>{
+  state._lightW=+e.target.value;
+  $("lightWVal").textContent=`±${(+e.target.value).toFixed(2)}`;
+  if(state._editIndex>=0) state.remapRules[state._editIndex].lightW=+e.target.value;
+  if(state.spoitMode==="region" && state._wandSeeds.length){ floodFromSeeds(); renderRegionPreview(); }
+  else { drawRangeMap(); renderRangeHighlight(); }
+};
+bindRangeMap();
+buildTargetSwatches();
 
 rebuildPalette();
 </script>
