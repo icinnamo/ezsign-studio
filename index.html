@@ -208,8 +208,12 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
   </div>
   <div id="edgeSliders">
     <div class="slider">
-      <label>エッジ感度 (大=線が減る) <b id="edgeVal">150</b></label>
-      <input type="range" id="edgeTh" min="80" max="260" step="5" value="150">
+      <label>面のまとまり (大=面が大きく統合) <b id="segTolVal">30</b></label>
+      <input type="range" id="segTol" min="5" max="80" step="1" value="30">
+    </div>
+    <div class="slider">
+      <label>輪郭しきい値 (小=線が増える) <b id="edgeVal">45</b></label>
+      <input type="range" id="edgeTh" min="10" max="160" step="5" value="45">
     </div>
     <div class="slider">
       <label>エッジ太さ <b id="edgeWVal">1.0</b></label>
@@ -336,7 +340,7 @@ const state = {
   img:null, rot:0, zoom:1, cx:0.5, cy:0.5,   // cx,cy=画像内の注視点(0-1)
   W:400, H:300, colors:4,
   dither:"atkinson", strength:0.8, sat:1.2, gamma:1.0,
-  dark:30, edges:true, edgeTh:150, edgeW:1, cs:"rgb",
+  dark:30, edges:true, edgeTh:45, segTol:30, edgeW:1, cs:"rgb",
   sim:false, showOrig:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
   remapRules:[], eyedropper:false, _preDitherBuf:null, _tapStart:null,
   _sampledHue:0, _sampledRange:28, _rangePreview:false, _srcBuf:null,
@@ -350,6 +354,10 @@ const state = {
   _hueW:30, _lightW:0.2,  // 色相幅(度)・明度幅(0-1)
   _editIndex:-1,  // -1=新規, 0以上=既存ルールの変換先を再編集
   midDither:"checker",  // 中間色の表現方式: checker/bayer/random/coarse
+  _fast:false,            // 動かし中(ドラッグ/ピンチ/ズーム)は軽い元画像プレビュー
+  _needMaskRefresh:false, // 移動・ズーム後にマスクを絵の位置から作り直す
+  _editing:false,         // スライダー操作中はエッジ計算をキャッシュ使い回し
+  _edgeLine:null,         // 輪郭線mask(重い分割結果)のキャッシュ
 };
 
 /* ============ 色判定 ============ */
@@ -425,6 +433,90 @@ function drawSource(){
   return ctx.getImageData(0,0,W,H);
 }
 
+/* ===== 画像座標 ⇔ 出力ピクセル座標 (drawSourceと同じ変換) ===== */
+function transformParams(){
+  const {img,rot,zoom,cx,cy,W,H}=state;
+  const rw=(rot%180===0)?img.width:img.height;
+  const rh=(rot%180===0)?img.height:img.width;
+  const s=Math.max(W/rw,H/rh)*zoom;   // 画像px→出力px の倍率
+  const rad=rot*Math.PI/180;
+  return {s,rad,cx,cy,iw:img.width,ih:img.height,W,H};
+}
+// 画像内の正規化座標(nx,ny: 0-1) → 現在の出力ピクセル(x,y)
+function imageNormToPixel(nx,ny){
+  const {s,rad,cx,cy,iw,ih,W,H}=transformParams();
+  const lx=nx*iw - iw*cx, ly=ny*ih - ih*cy;
+  const sx=s*lx, sy=s*ly;
+  const cosr=Math.cos(rad), sinr=Math.sin(rad);
+  return [Math.round(cosr*sx - sinr*sy + W/2), Math.round(sinr*sx + cosr*sy + H/2)];
+}
+// 出力ピクセル(px,py) → 画像内の正規化座標(nx,ny)
+function pixelToImageNorm(px,py){
+  const {s,rad,cx,cy,iw,ih,W,H}=transformParams();
+  const dx=px - W/2, dy=py - H/2;
+  const cosr=Math.cos(rad), sinr=Math.sin(rad);
+  const ux=cosr*dx + sinr*dy, uy=-sinr*dx + cosr*dy;  // 逆回転
+  return [(ux/s + iw*cx)/iw, (uy/s + ih*cy)/ih];
+}
+const _cl255=v=>Math.max(0,Math.min(255,v));
+// 色ルール(飛び地除去ON)のマスクを現在の元画像から作り直す
+function buildColorMaskForRule(rule){
+  const W=state.W,H=state.H,N=W*H,buf=state._srcBuf;
+  const mask=new Uint8Array(N);
+  for(let i=0;i<N;i++){
+    const hsl=rgb2hsl(_cl255(buf[i*3]),_cl255(buf[i*3+1]),_cl255(buf[i*3+2]));
+    if(diamondHit(hsl[0],hsl[1],hsl[2], rule.hue,rule.cs,rule.cl, rule.mapX,rule.mapY, rule.hueW,rule.lightW)) mask[i]=1;
+  }
+  despeckleMask(mask, rule.minSize|0, false);
+  return mask;
+}
+// 移動・ズーム後: 各ルールのマスクを「絵の位置」から作り直す(画面に貼り付かないように)
+function refreshRuleMasks(){
+  if(!state._srcBuf || !state.img) return;
+  const N=state.W*state.H;
+  for(const rule of state.remapRules){
+    if(rule.region && rule.seeds){
+      // 領域ルール: 種を絵の位置から現在の出力ピクセルへ写し、塗り直す
+      const remapped=[];
+      for(const sd of rule.seeds){
+        let x,y;
+        if(sd.nx!=null){ const p=imageNormToPixel(sd.nx,sd.ny); x=p[0]; y=p[1]; }
+        else { x=sd.x; y=sd.y; }
+        if(x<0||x>=state.W||y<0||y>=state.H) continue;   // 画面外の種は対象外
+        const i=(y*state.W+x)*3;
+        const hsl=rgb2hsl(_cl255(state._srcBuf[i]),_cl255(state._srcBuf[i+1]),_cl255(state._srcBuf[i+2]));
+        remapped.push({x,y,nx:sd.nx,ny:sd.ny,h:hsl[0],s:hsl[1],l:hsl[2]});
+      }
+      // 既存のflood+飛び地除去ロジックを流用(状態を一時的に差し替え)
+      const sv={seeds:state._wandSeeds,hw:state._hueW,lw:state._lightW,ms:state.regionMinSize,mask:state._wandMask};
+      try{
+        state._wandSeeds=remapped; state._hueW=rule.hueW; state._lightW=rule.lightW; state.regionMinSize=rule.minSize|0;
+        floodFromSeeds();
+        rule.mask = state._wandMask ? state._wandMask.slice() : new Uint8Array(N);
+      } finally {
+        state._wandSeeds=sv.seeds; state._hueW=sv.hw; state._lightW=sv.lw; state.regionMinSize=sv.ms; state._wandMask=sv.mask;
+      }
+    } else if(rule.mask && !rule.region){
+      // 色ルール(飛び地除去ON): 色の条件から作り直す
+      rule.mask = buildColorMaskForRule(rule);
+    }
+    // マスク無しの色ルールは applyColorMap が毎回色で判定するので作り直し不要
+  }
+}
+// 選択途中(未確定)の種も絵の位置に追従させる
+function remapLiveSeeds(){
+  if(!state._wandSeeds||!state.img||!state._srcBuf) return;
+  for(const sd of state._wandSeeds){
+    if(sd.nx==null) continue;
+    const p=imageNormToPixel(sd.nx,sd.ny); sd.x=p[0]; sd.y=p[1];
+    if(p[0]>=0&&p[0]<state.W&&p[1]>=0&&p[1]<state.H){
+      const i=(p[1]*state.W+p[0])*3;
+      const hsl=rgb2hsl(_cl255(state._srcBuf[i]),_cl255(state._srcBuf[i+1]),_cl255(state._srcBuf[i+2]));
+      sd.h=hsl[0]; sd.s=hsl[1]; sd.l=hsl[2];
+    }
+  }
+}
+
 function applyPre(d){ // 明るさ・コントラスト・ガンマ・彩度
   const {sat,gamma,bright,contrast}=state;
   const lut=new Uint8Array(256);
@@ -466,7 +558,9 @@ function floodSeedMask(sd){
   const hueTol=Math.max(state._hueW,1), lightTol=Math.max(state._lightW,0.01);
   const stack=new Int32Array(N), visited=new Uint8Array(N);
   const sh=sd.h, sAch=(sd.s<0.12), sl=sd.l;
-  let sp=0; const start=sd.y*W+sd.x; stack[sp++]=start; visited[start]=1;
+  let sp=0; const start=sd.y*W+sd.x;
+  if(sd.x<0||sd.x>=W||sd.y<0||sd.y>=H) return mask;   // 画面外の種は空マスク
+  stack[sp++]=start; visited[start]=1;
   while(sp>0){
     const cur=stack[--sp];
     const hsl=rgb2hsl(buf[cur*3],buf[cur*3+1],buf[cur*3+2]);
@@ -585,46 +679,112 @@ function dither(buf){
   return out;
 }
 
-function addEdges(buf,out){ // buf=ディザ前 out=ディザ後(書き換え)
-  const {W,H,edgeTh}=state;
-  const gray=new Float32Array(W*H);
-  for(let i=0,j=0;i<W*H;i++,j+=3) gray[i]=0.299*buf[j]+0.587*buf[j+1]+0.114*buf[j+2];
-  // 積分画像で局所輝度(9x9平均)
-  const ii=new Float64Array((W+1)*(H+1));
-  for(let y=0;y<H;y++){let row=0;
-    for(let x=0;x<W;x++){row+=gray[y*W+x];
-      ii[(y+1)*(W+1)+x+1]=ii[y*(W+1)+x+1]+row;}}
-  const local=(x,y)=>{
-    const x0=Math.max(0,x-4),y0=Math.max(0,y-4),x1=Math.min(W-1,x+4),y1=Math.min(H-1,y+4);
-    const s=ii[(y1+1)*(W+1)+x1+1]-ii[y0*(W+1)+x1+1]-ii[(y1+1)*(W+1)+x0]+ii[y0*(W+1)+x0];
-    return s/((x1-x0+1)*(y1-y0+1));
+function segmentEdgeLine(buf){ // 重い処理: 領域分割して輪郭線mask(line)を返す。buf=ディザ前RGB(Float32 W*H*3)
+  const {W,H}=state, N=W*H;
+  // 1) 軽くならして質感・点ノイズを抑える (3x3 ボックス平均)
+  const sm=new Float32Array(N*3);
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    let r=0,g=0,b=0,c=0;
+    for(let dy=-1;dy<=1;dy++){const yy=y+dy; if(yy<0||yy>=H)continue;
+      for(let dx=-1;dx<=1;dx++){const xx=x+dx; if(xx<0||xx>=W)continue;
+        const k=(yy*W+xx)*3; r+=buf[k]; g+=buf[k+1]; b+=buf[k+2]; c++; }}
+    const j=(y*W+x)*3; sm[j]=r/c; sm[j+1]=g/c; sm[j+2]=b/c;
+  }
+  // HSLを先に全画素ぶん計算 (領域選択と同じ判定に使う)
+  const Hh=new Float32Array(N), Sl=new Float32Array(N), Ll=new Float32Array(N);
+  for(let i=0;i<N;i++){const hsl=rgb2hsl(sm[i*3],sm[i*3+1],sm[i*3+2]); Hh[i]=hsl[0]; Sl[i]=hsl[1]; Ll[i]=hsl[2];}
+  // 2) 全画面を flood で領域分割 (各領域の最初の画素=種と比較。領域選択と同じロジック)
+  const segTol=state.segTol;                       // 5-80
+  const hueTol=Math.max(6, segTol*0.9);            // 度
+  const lightTol=Math.max(0.03, segTol/100*0.5);   // 0-1
+  const label=new Int32Array(N).fill(-1);
+  const stack=new Int32Array(N);
+  const sizeArr=[], rSum=[], gSum=[], bSum=[];
+  let nReg=0, sp=0, curId=0, curSh=0, curSl=0, curSAch=false;
+  const grow=(nb)=>{
+    if(label[nb]!==-1) return;
+    let dh=Math.abs(Hh[nb]-curSh); if(dh>180)dh=360-dh;
+    const hueOk=(curSAch||Sl[nb]<0.12)?true:(dh<=hueTol);
+    if(hueOk && Math.abs(Ll[nb]-curSl)<=lightTol){ label[nb]=curId; stack[sp++]=nb; }
   };
-  const mag=new Float32Array(W*H);
-  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
+  for(let s=0;s<N;s++){
+    if(label[s]!==-1) continue;
+    curId=nReg++; curSh=Hh[s]; curSAch=(Sl[s]<0.12); curSl=Ll[s];
+    sp=0; stack[sp++]=s; label[s]=curId;
+    let cnt=0, sr=0, sg=0, sb=0;
+    while(sp>0){
+      const cur=stack[--sp];
+      cnt++; sr+=sm[cur*3]; sg+=sm[cur*3+1]; sb+=sm[cur*3+2];
+      const x=cur%W, y=(cur/W)|0;
+      if(x>0)grow(cur-1); if(x<W-1)grow(cur+1); if(y>0)grow(cur-W); if(y<H-1)grow(cur+W);
+    }
+    sizeArr[curId]=cnt; rSum[curId]=sr; gSum[curId]=sg; bSum[curId]=sb;
+  }
+  // 3) 小さい面を、隣接する一番似た色の大領域へ併合(マージ)する
+  const parent=new Int32Array(nReg); for(let i=0;i<nReg;i++)parent[i]=i;
+  const rsz=Int32Array.from(sizeArr);
+  const sR=Float64Array.from(rSum), sG=Float64Array.from(gSum), sB=Float64Array.from(bSum);
+  const find=x=>{while(parent[x]!==x){parent[x]=parent[parent[x]];x=parent[x];}return x;};
+  const meanDist=(a,b)=>Math.hypot(sR[a]/rsz[a]-sR[b]/rsz[b], sG[a]/rsz[a]-sG[b]/rsz[b], sB[a]/rsz[a]-sB[b]/rsz[b]);
+  const adj=Array.from({length:nReg},()=>new Set());
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
     const i=y*W+x;
-    const gx=-gray[i-W-1]-2*gray[i-1]-gray[i+W-1]+gray[i-W+1]+2*gray[i+1]+gray[i+W+1];
-    const gy=-gray[i-W-1]-2*gray[i-W]-gray[i-W+1]+gray[i+W-1]+2*gray[i+W]+gray[i+W+1];
-    mag[i]=Math.hypot(gx,gy);
+    if(x<W-1){const a=label[i],b=label[i+1]; if(a!==b){adj[a].add(b);adj[b].add(a);}}
+    if(y<H-1){const a=label[i],b=label[i+W]; if(a!==b){adj[a].add(b);adj[b].add(a);}}
   }
-  // 1pxのシャープな細線 (非極大抑制) を基準にする
-  const line=new Uint8Array(W*H);
-  for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
-    const i=y*W+x, m=mag[i];
-    if(m<=edgeTh) continue;
-    let mx=0;
-    for(let dy=-1;dy<=1;dy++)for(let dx=-1;dx<=1;dx++) mx=Math.max(mx,mag[i+dy*W+dx]);
-    if(m===mx && local(x,y)>=60) line[i]=1;
+  const SEGMIN=Math.max(16, Math.round(N*0.0004)); // この大きさ未満は「面」と認めずマージ
+  let changed=true, guard=0;
+  while(changed && guard++<24){
+    changed=false;
+    for(let id=0;id<nReg;id++){
+      const r=find(id); if(r!==id) continue;          // 根だけ処理
+      if(rsz[r]>=SEGMIN) continue;                     // 十分大きい面はそのまま
+      let best=-1, bestD=Infinity, bestBig=-1, bestBigD=Infinity;
+      for(const nb0 of adj[r]){ const nb=find(nb0); if(nb===r) continue;
+        const d=meanDist(r,nb);
+        if(d<bestD){bestD=d;best=nb;}
+        if(rsz[nb]>=SEGMIN && d<bestBigD){bestBigD=d;bestBig=nb;} // 大きな面を優先
+      }
+      const tgt = bestBig>=0?bestBig:best;
+      if(tgt<0) continue;                              // 隣接が無ければ放置(描画時にスキップ)
+      const keep=rsz[tgt]>=rsz[r]?tgt:r, drop=(keep===tgt)?r:tgt;
+      parent[drop]=keep; rsz[keep]+=rsz[drop]; sR[keep]+=sR[drop]; sG[keep]+=sG[drop]; sB[keep]+=sB[drop];
+      for(const x of adj[drop]) adj[keep].add(x);
+      changed=true;
+    }
   }
-  for(let i=0;i<W*H;i++) if(line[i]){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
-  // 太さ1.0超の端数分だけ、線の上下左右に点描を足して少しずつ太らせる
-  const a=state.edgeW-1;  // 0.0〜1.0
-  if(a>0){
+  // 4) 大領域どうしで、平均色がしきい値以上ちがう境界にだけ線(暗い側へ1px)
+  const th=state.edgeTh;                              // 輪郭しきい値(平均色のRGB距離)
+  const lumaOf=r=>0.299*sR[r]/rsz[r]+0.587*sG[r]/rsz[r]+0.114*sB[r]/rsz[r];
+  const line=new Uint8Array(N);
+  const tryPair=(i,nb)=>{
+    const a=find(label[i]), b=find(label[nb]);
+    if(a===b) return;
+    if(rsz[a]<SEGMIN || rsz[b]<SEGMIN) return;
+    if(meanDist(a,b)<th) return;
+    const la=lumaOf(a), lb=lumaOf(b);
+    if(la<lb || (la===lb && a<b)) line[i]=1; else line[nb]=1; // 暗い側を1px
+  };
+  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
+    const i=y*W+x;
+    if(x<W-1) tryPair(i,i+1);
+    if(y<H-1) tryPair(i,i+W);
+  }
+  return line;
+}
+// 軽い処理: 輪郭線mask(line)を出力に黒く焼く(+太さ端数の点描)。毎フレーム呼んでOK
+function paintEdgeLine(out,line){
+  if(!line) return;
+  const {W,H}=state, N=W*H;
+  for(let i=0;i<N;i++) if(line[i]){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
+  const aa=state.edgeW-1;  // 0.0〜1.0
+  if(aa>0){
     for(let y=1;y<H-1;y++)for(let x=1;x<W-1;x++){
       const i=y*W+x;
       if(line[i]) continue;
       if(line[i-1]||line[i+1]||line[i-W]||line[i+W]){
-        const th=(BAYER[y%4][x%4]+0.5)/16;
-        if(a>=th){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
+        const t=(BAYER[y%4][x%4]+0.5)/16;
+        if(aa>=t){const j=i*3;out[j]=out[j+1]=out[j+2]=0;}
       }
     }
   }
@@ -712,11 +872,25 @@ function render(){
     {const sb=new Float32Array(state.W*state.H*3);
      for(let i=0,j=0;i<src.data.length;i+=4,j+=3){sb[j]=src.data[i];sb[j+1]=src.data[i+1];sb[j+2]=src.data[i+2];}
      state._srcBuf=sb;}
+    // 動かし中は重い変換を省略して軽い元画像だけ表示(なめらか・処理を逃がす)
+    if(state._fast){
+      const {W,H}=state, sb=state._srcBuf;
+      preview.width=W; preview.height=H;
+      const lid=new ImageData(W,H);
+      for(let i=0;i<W*H;i++){ lid.data[i*4]=sb[i*3]; lid.data[i*4+1]=sb[i*3+1]; lid.data[i*4+2]=sb[i*3+2]; lid.data[i*4+3]=255; }
+      preview.getContext("2d").putImageData(lid,0,0);
+      return;
+    }
+    // 移動・ズーム後: 変換場所(マスク)を絵の位置から作り直してから本変換
+    if(state._needMaskRefresh){ refreshRuleMasks(); state._needMaskRefresh=false; }
     const buf=applyPre(src);
     state._preDitherBuf=buf;
     const mapped=applyColorMap(buf);
     const out=dither(mapped);
-    if(state.edges) addEdges(buf,out);
+    if(state.edges){
+      if(!state._editing || !state._edgeLine) state._edgeLine=segmentEdgeLine(buf); // 手を止めた時に引き直し
+      paintEdgeLine(out,state._edgeLine);                                            // 毎回これは軽い
+    } else state._edgeLine=null;
     const {W,H}=state;
     pureCanvas.width=W; pureCanvas.height=H;
     preview.width=W; preview.height=H;
@@ -848,13 +1022,14 @@ function tapRegion(cx,cy){
   const i=(p[1]*W+p[0])*3;
   const r=state._srcBuf[i], g=state._srcBuf[i+1], b=state._srcBuf[i+2];
   const [h,s,l]=rgb2hsl(Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b)));
-  state._lastSeed={x:p[0], y:p[1], h, s, l};
+  const nrm=pixelToImageNorm(p[0],p[1]);
+  state._lastSeed={x:p[0], y:p[1], nx:nrm[0], ny:nrm[1], h, s, l};
   if(!state._wandSeeds) state._wandSeeds=[];
   // すでに選択済みの所をタップ → その塊を取り消し / それ以外 → 追加
   if(state._wandMask && state._wandMask[p[1]*W+p[0]]===1){
     removeSeedAt(p[0],p[1]);
   }else{
-    state._wandSeeds.push({x:p[0], y:p[1], h, s, l});
+    state._wandSeeds.push({x:p[0], y:p[1], nx:nrm[0], ny:nrm[1], h, s, l});
   }
   floodFromSeeds();
   state._regionMaskPreview=true;
@@ -904,7 +1079,7 @@ function renderRegionPreview(){
 function commitRegion(mix,name){
   if(wandMaskCount()===0) return;
   const ruleObj={region:true, mask:state._wandMask, mix, targetName:name+"(領域)",
-    seeds:state._wandSeeds.map(sd=>({x:sd.x,y:sd.y,h:sd.h,s:sd.s,l:sd.l})),
+    seeds:state._wandSeeds.map(sd=>({x:sd.x,y:sd.y,nx:sd.nx,ny:sd.ny,h:sd.h,s:sd.s,l:sd.l})),
     hueW:state._hueW, lightW:state._lightW, minSize:state.regionMinSize|0};
   if(state._editIndex>=0 && state.remapRules[state._editIndex] && state.remapRules[state._editIndex].region){
     state.remapRules[state._editIndex]=ruleObj; // 再編集: 同じ位置を置き換え
@@ -1084,6 +1259,7 @@ $("fileInput").onchange=e=>{
       state._wandSeeds=[]; state._wandMask=null; // 領域選択はリセット
       $("empty").style.display="none";
       $("zoom").value=1; $("zoomVal").textContent="1.00x";
+      state._needMaskRefresh=true;
       render();
     };
     img.onerror=()=>{
@@ -1098,7 +1274,7 @@ $("fileInput").onchange=e=>{
 
 $("sizeSel").onchange=e=>{
   const [w,h]=e.target.value.split("x").map(Number);
-  state.W=w; state.H=h; render();
+  state.W=w; state.H=h; state._needMaskRefresh=true; render();
 };
 $("colorSel").onchange=e=>{
   state.colors=+e.target.value; rebuildPalette();
@@ -1106,20 +1282,23 @@ $("colorSel").onchange=e=>{
   $("inkY").classList.toggle("off", state.colors<4);
   render();
 };
-$("rotBtn").onclick=()=>{state.rot=(state.rot+90)%360; render();};
+$("rotBtn").onclick=()=>{state.rot=(state.rot+90)%360; state._needMaskRefresh=true; render();};
 $("resetBtn").onclick=()=>{
   state.zoom=1;state.cx=0.5;state.cy=0.5;
-  $("zoom").value=1;$("zoomVal").textContent="1.00x";render();
+  $("zoom").value=1;$("zoomVal").textContent="1.00x";state._needMaskRefresh=true;render();
 };
 
 function bindSlider(id,key,valId,fmt){
   $(id).oninput=e=>{
     state[key]=+e.target.value;
     $(valId).textContent=fmt(+e.target.value);
+    state._editing=true;            // 操作中はエッジ計算をキャッシュ使い回し
     render();
   };
+  $(id).onchange=()=>{ state._editing=false; render(); };  // 手を止めたらエッジを引き直し
 }
-bindSlider("zoom","zoom","zoomVal",v=>v.toFixed(2)+"x");
+$("zoom").oninput=e=>{ state.zoom=+e.target.value; $("zoomVal").textContent=(+e.target.value).toFixed(2)+"x"; state._fast=true; render(); };
+$("zoom").onchange=()=>{ state._fast=false; state._needMaskRefresh=true; render(); };
 bindSlider("strength","strength","strengthVal",v=>v.toFixed(2));
 bindSlider("sat","sat","satVal",v=>v.toFixed(2));
 bindSlider("gamma","gamma","gammaVal",v=>v.toFixed(2));
@@ -1144,6 +1323,7 @@ $("origBtn").onclick=()=>{
   render();
 };
 bindSlider("edgeTh","edgeTh","edgeVal",v=>v.toFixed(0));
+bindSlider("segTol","segTol","segTolVal",v=>v.toFixed(0));
 bindSlider("edgeW","edgeW","edgeWVal",v=>v.toFixed(1));
 
 function bindSeg(id,key){
@@ -1224,6 +1404,7 @@ screen.addEventListener("pointermove",e=>{
     const sy=(dx*Math.sin(rad)+dy*Math.cos(rad))/s;
     state.cx=Math.max(0,Math.min(1,state.cx - sx/state.img.width));
     state.cy=Math.max(0,Math.min(1,state.cy - sy/state.img.height));
+    state._fast=true;
     render();
   }else if(pointers.size===2){
     const [a,b]=[...pointers.values()];
@@ -1232,6 +1413,7 @@ screen.addEventListener("pointermove",e=>{
       state.zoom=Math.max(1,Math.min(6,state.zoom*d/pinchDist));
       $("zoom").value=state.zoom;
       $("zoomVal").textContent=state.zoom.toFixed(2)+"x";
+      state._fast=true;
       render();
     }
     pinchDist=d;
@@ -1240,15 +1422,30 @@ screen.addEventListener("pointermove",e=>{
 screen.addEventListener("pointerup",e=>{
   const wasOne=pointers.size===1;
   pointers.delete(e.pointerId);pinchDist=0;
+  let didTap=false;
   if(state.eyedropper&&wasOne&&state._tapStart){
     const dx=e.clientX-state._tapStart.x,dy=e.clientY-state._tapStart.y;
     if(Math.hypot(dx,dy)<10){
+      didTap=true;
       if(state.spoitMode==="region") tapRegion(e.clientX,e.clientY);
       else sampleColor(e.clientX,e.clientY);
     }
   }
+  if(state._fast){
+    state._fast=false;
+    if(didTap){
+      /* タップ時は各処理側が表示済み。本変換しない(ハイライト等を維持) */
+    }else if(state._regionMaskPreview && state._wandSeeds && state._wandSeeds.length){
+      remapLiveSeeds(); floodFromSeeds(); renderRegionPreview();  // 選択途中のパン: 種を絵に追従
+    }else{
+      state._needMaskRefresh=true; render();                     // 通常のパン/ピンチ後: 作り直して本変換
+    }
+  }
 });
-screen.addEventListener("pointercancel",e=>{pointers.delete(e.pointerId);pinchDist=0;});
+screen.addEventListener("pointercancel",e=>{
+  pointers.delete(e.pointerId);pinchDist=0;
+  if(state._fast){ state._fast=false; state._needMaskRefresh=true; render(); }
+});
 
 /* 保存: 長押し保存用のオーバーレイ表示 (iOSで最も確実な方式) */
 $("saveBtn").onclick=()=>{
