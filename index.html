@@ -158,6 +158,7 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
 <!-- 調整 -->
 <section>
   <h2>調整</h2>
+  <button class="btn-sub" id="autoBtn" style="margin-top:0;margin-bottom:12px">✨ おまかせ自動調整</button>
   <div class="row">
     <div class="seg" id="ditherSeg">
       <button data-v="none">なし</button>
@@ -165,6 +166,15 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
       <button data-v="atkinson" class="on">Atkinson</button>
       <button data-v="bayer">Bayer</button>
     </div>
+  </div>
+  <div class="row">
+    <span style="font-size:13px;color:var(--dim);flex:1">色モード</span>
+    <select id="colorModeSel" style="flex:1;max-width:160px">
+      <option value="device">実機色 (標準)</option>
+      <option value="classic">従来 (v1)</option>
+      <option value="vivid">あざやか</option>
+      <option value="lownoise">低ノイズ感優先</option>
+    </select>
   </div>
   <div class="row">
     <div class="seg" id="csSeg" style="max-width:170px">
@@ -341,6 +351,7 @@ const state = {
   W:400, H:300, colors:4,
   dither:"atkinson", strength:0.8, sat:1.2, gamma:1.0,
   dark:30, edges:false, edgeTh:45, segTol:30, edgeW:1, cs:"rgb",
+  colorMode:"device",    // 色モード(COLOR_MODES のキー。device/classic/vivid/lownoise)
   sim:false, showOrig:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
   remapRules:[], eyedropper:false, _preDitherBuf:null, _tapStart:null,
   _sampledHue:0, _sampledRange:28, _rangePreview:false, _srcBuf:null,
@@ -358,6 +369,7 @@ const state = {
   _needMaskRefresh:false, // 移動・ズーム後にマスクを絵の位置から作り直す
   _editing:false,         // スライダー操作中はエッジ計算をキャッシュ使い回し
   _edgeLine:null,         // 輪郭線mask(重い分割結果)のキャッシュ
+  _mips:null,             // 縮小画質用ミップ(1/2,1/4,…の縮小版canvas。画像読込時に生成)
 };
 
 /* ============ 色判定 ============ */
@@ -387,33 +399,75 @@ function rgb2hsl(r,g,b){
   }
   return[h,s,l];
 }
-let PAL=[], PAL_LAB=[], BIASW=[1,1,1,1];
+let PAL=[], PAL_DEV=[], PAL_LAB_PURE=[], PAL_LAB_DEV=[], BIASW=[1,1,1,1];
 function rebuildPalette(){
   PAL = paletteFor(state.colors);
-  PAL_LAB = PAL.map(c=>rgb2lab(c[0],c[1],c[2]));
+  // 実機色: SIMテーブルの発色。距離計算の基準に使う(出力・保存は常に純4色のまま=死守事項)
+  PAL_DEV = PAL.map(c=>SIM[(c[0]<<16)|(c[1]<<8)|c[2]]||c);
+  PAL_LAB_PURE = PAL.map(c=>rgb2lab(c[0],c[1],c[2]));
+  PAL_LAB_DEV  = PAL_DEV.map(c=>rgb2lab(c[0],c[1],c[2]));
 }
-function nearest(r,g,b){
+/* 色モード: 「どの基準で4色に振り分けるか」の名前付きセット(UI=colorModeSel)
+   dev   = 距離計算の基準色(true=実機の発色 / false=純色)
+   wq    = RGB距離の知覚重み(人間の目は緑に敏感・青に鈍感。[1,1,1]=v1の等重み)
+   guard = 無彩色ガード(クロマがこの値未満の画素は純色基準で判定=グレーに赤/黄ノイズを出さない)
+   pen   = 赤/黄への乗りにくさ(距離に乗算。<1=乗りやすい / >1=乗りにくい。BIASWスライダーとは乗算で両立) */
+const COLOR_MODES={
+  device:  {dev:true,  wq:[0.30,0.59,0.11], guard:30, pen:1},    // 実機色(標準): 写真・実機の見た目重視
+  classic: {dev:false, wq:[1,1,1],          guard:0,  pen:1},    // 従来: v1 と同じ判定
+  vivid:   {dev:true,  wq:[0.30,0.59,0.11], guard:15, pen:0.75}, // あざやか: 色を積極的に拾う(イラスト・ポップ)
+  lownoise:{dev:true,  wq:[0.30,0.59,0.11], guard:60, pen:1.3},  // 低ノイズ感優先: ベタ塗り向き(AA縁の点ノイズ抑制)
+};
+// 最も近いパレット色の index を返す(基準は state.colorMode の色モードに従う)
+function nearestIdx(r,g,b){
+  const md=COLOR_MODES[state.colorMode]||COLOR_MODES.device;
   let best=0, bd=Infinity;
   if(state.cs==="lab"){
     const p=rgb2lab(Math.max(0,Math.min(255,r)),Math.max(0,Math.min(255,g)),Math.max(0,Math.min(255,b)));
-    for(let i=0;i<PAL_LAB.length;i++){
-      const q=PAL_LAB[i];
-      const d=((p[0]-q[0])**2+(p[1]-q[1])**2+(p[2]-q[2])**2)*BIASW[i];
+    const L=md.dev?PAL_LAB_DEV:PAL_LAB_PURE;
+    for(let i=0;i<L.length;i++){
+      const q=L[i];
+      let d=((p[0]-q[0])**2+(p[1]-q[1])**2+(p[2]-q[2])**2)*BIASW[i];
+      if(i>=2) d*=md.pen;
       if(d<bd){bd=d;best=i;}
     }
   }else{
-    for(let i=0;i<PAL.length;i++){
-      const q=PAL[i];
-      const d=((r-q[0])**2+(g-q[1])**2+(b-q[2])**2)*BIASW[i];
+    const cr=Math.max(0,Math.min(255,r)), cg=Math.max(0,Math.min(255,g)), cb=Math.max(0,Math.min(255,b));
+    const chroma=Math.max(cr,cg,cb)-Math.min(cr,cg,cb);
+    const P=(md.dev && chroma>=md.guard)?PAL_DEV:PAL;
+    const wr=md.wq[0], wg=md.wq[1], wb=md.wq[2];
+    for(let i=0;i<P.length;i++){
+      const q=P[i];
+      let d=(wr*(r-q[0])**2+wg*(g-q[1])**2+wb*(b-q[2])**2)*BIASW[i];
+      if(i>=2) d*=md.pen;
       if(d<bd){bd=d;best=i;}
     }
   }
-  return PAL[best];
+  return best;
 }
+function nearest(r,g,b){ return PAL[nearestIdx(r,g,b)]; }
 
 /* ============ 変換パイプライン ============ */
 const work = document.createElement("canvas");   // クロップ後の元画像
 const preview = document.getElementById("preview");
+
+// 大判写真の一発縮小はディテールが潰れるため、読込時に 1/2,1/4,1/8… の縮小版(ミップ)を
+// 一度だけ作っておき、drawSource は目標倍率に近いミップから描く(段階的半分縮小と同等の品質)。
+// 注意: transformParams / imageNormToPixel / pixelToImageNorm は元画像寸法基準のまま
+// (ミップは合成結果が同一になる等価変換なので、色変換マスクの座標系には影響しない)。
+function buildMips(img){
+  const mips=[];
+  let src=img, w=img.width, h=img.height;
+  while(w>1024 || h>1024){                       // 長辺が~1024px以下になるまで半分ずつ
+    w=Math.max(1,Math.round(w/2)); h=Math.max(1,Math.round(h/2));
+    const c=document.createElement("canvas"); c.width=w; c.height=h;
+    const cx=c.getContext("2d");
+    cx.imageSmoothingEnabled=true; cx.imageSmoothingQuality="high";
+    cx.drawImage(src,0,0,w,h);
+    mips.push(c); src=c;
+  }
+  return mips;
+}
 
 function drawSource(){
   const {img,rot,zoom,cx,cy,W,H}=state;
@@ -423,12 +477,21 @@ function drawSource(){
   if(!img) return null;
   const rw = (rot%180===0)? img.width : img.height;
   const rh = (rot%180===0)? img.height: img.width;
-  const s = Math.max(W/rw, H/rh) * zoom;
+  const s = Math.max(W/rw, H/rh) * zoom;          // 元画像px → 出力px の倍率
+  // ミップ選択: 縮小率が1/2を超えるなら、縮小済みミップから描く(f=元画像/ミップ の倍率)
+  let src=img, f=1;
+  if(state._mips){
+    for(const m of state._mips){
+      const mf=img.width/m.width;
+      if(s*mf<=1){ src=m; f=mf; } else break;     // ミップ側の実効倍率が等倍以下の範囲で最小のものを選ぶ
+    }
+  }
+  ctx.imageSmoothingEnabled=true; ctx.imageSmoothingQuality="high";
   ctx.save();
   ctx.translate(W/2, H/2);
   ctx.rotate(rot*Math.PI/180);
-  ctx.scale(s,s);
-  ctx.drawImage(img, -img.width*cx, -img.height*cy);
+  ctx.scale(s*f, s*f);
+  ctx.drawImage(src, -src.width*cx, -src.height*cy);
   ctx.restore();
   return ctx.getImageData(0,0,W,H);
 }
@@ -657,22 +720,29 @@ function dither(buf){
     }
     return out;
   }
-  // 誤差拡散 (fs / atkinson)
+  // 誤差拡散 (fs / atkinson) — サーペンタイン走査(1行ごとに向きを反転してワーム模様=斜めの筋を抑える)
   const {k,div}=KERNELS[mode];
   const a=Float32Array.from(buf);
-  for(let y=0;y<H;y++)for(let x=0;x<W;x++){
-    const j=(y*W+x)*3;
-    const gray=0.299*a[j]+0.587*a[j+1]+0.114*a[j+2];
-    if(gray<state.dark){out[j]=out[j+1]=out[j+2]=0;continue;}
-    const or=a[j],og=a[j+1],ob=a[j+2];
-    const c=nearest(or,og,ob);
-    out[j]=c[0];out[j+1]=c[1];out[j+2]=c[2];
-    const er=(or-c[0])*strength/div, eg=(og-c[1])*strength/div, eb=(ob-c[2])*strength/div;
-    for(const [dy,dx,w] of k){
-      const ny=y+dy,nx=x+dx;
-      if(ny<H&&nx>=0&&nx<W){
-        const m=(ny*W+nx)*3;
-        a[m]+=er*w;a[m+1]+=eg*w;a[m+2]+=eb*w;
+  const CLMIN=-96, CLMAX=351;   // 誤差蓄積の暴走クランプ(彩色部のにじみ筋を防ぐ)
+  for(let y=0;y<H;y++){
+    const ltr=(y&1)===0;         // 偶数行=左→右 / 奇数行=右→左
+    for(let xi=0;xi<W;xi++){
+      const x=ltr?xi:W-1-xi;
+      const j=(y*W+x)*3;
+      const gray=0.299*a[j]+0.587*a[j+1]+0.114*a[j+2];
+      if(gray<state.dark){out[j]=out[j+1]=out[j+2]=0;continue;}
+      const or=a[j],og=a[j+1],ob=a[j+2];
+      const c=nearest(or,og,ob);
+      out[j]=c[0];out[j+1]=c[1];out[j+2]=c[2];
+      const er=(or-c[0])*strength/div, eg=(og-c[1])*strength/div, eb=(ob-c[2])*strength/div;
+      for(const [dy,dx,w] of k){
+        const ny=y+dy, nx=x+(ltr?dx:-dx);   // 走査方向に合わせてカーネルも左右反転
+        if(ny<H&&nx>=0&&nx<W){
+          const m=(ny*W+nx)*3;
+          a[m]  =Math.max(CLMIN,Math.min(CLMAX,a[m]  +er*w));
+          a[m+1]=Math.max(CLMIN,Math.min(CLMAX,a[m+1]+eg*w));
+          a[m+2]=Math.max(CLMIN,Math.min(CLMAX,a[m+2]+eb*w));
+        }
       }
     }
   }
@@ -1256,6 +1326,7 @@ $("fileInput").onchange=e=>{
     const img=new Image();
     img.onload=()=>{
       state.img=img; state.rot=0; state.zoom=1; state.cx=0.5; state.cy=0.5;
+      state._mips=buildMips(img);                 // 縮小画質用ミップ(読込時に一度だけ生成)
       state._wandSeeds=[]; state._wandMask=null; // 領域選択はリセット
       $("empty").style.display="none";
       $("zoom").value=1; $("zoomVal").textContent="1.00x";
@@ -1309,6 +1380,43 @@ bindSlider("biasR","biasR","biasRVal",v=>v.toFixed(2));
 bindSlider("biasY","biasY","biasYVal",v=>v.toFixed(2));
 
 $("midDitherSel").onchange=e=>{state.midDither=e.target.value;render();};
+$("colorModeSel").onchange=e=>{state.colorMode=e.target.value;render();};
+
+/* おまかせ自動調整: 現在のクロップ範囲のヒストグラムから 明るさ/コントラスト/ガンマ/彩度 を自動セット。
+   押した時だけ働く(常時自動にはしない=「自動シャドウ補正はしない」の確定判断に配慮)。
+   結果は4つのスライダーに反映されるので、気に入らなければそのまま手直しできる。 */
+function autoAdjust(){
+  if(!state.img||!state._srcBuf){alert("先に写真を選んでください");return;}
+  const buf=state._srcBuf, N=state.W*state.H;
+  const hist=new Uint32Array(256);
+  let chromaSum=0;
+  for(let i=0;i<N;i++){
+    const r=_cl255(buf[i*3]), g=_cl255(buf[i*3+1]), b=_cl255(buf[i*3+2]);
+    hist[Math.round(0.299*r+0.587*g+0.114*b)]++;
+    chromaSum+=Math.max(r,g,b)-Math.min(r,g,b);
+  }
+  const pct=q=>{const t=N*q;let acc=0;for(let v=0;v<256;v++){acc+=hist[v];if(acc>=t)return v;}return 255;};
+  const lo=pct(0.02), hi=pct(0.98), med=pct(0.5);
+  // 輝度の2%〜98%を 10〜245 に写す線形ストレッチを、applyPre の式 (v-128)*contrast+128+bright に逆算
+  let con=(245-10)/Math.max(hi-lo,1);
+  con=Math.max(0.5,Math.min(1.8,Math.round(con*20)/20));
+  let bri=10-(lo-128)*con-128;
+  bri=Math.max(-60,Math.min(60,Math.round(bri/5)*5));
+  // ガンマ: ストレッチ後の中央値を中間調へ寄せる(夜・ムードの雰囲気を壊さないよう 0.85〜1.15 の控えめクランプ)
+  const medS=Math.max(1,Math.min(254,(med-128)*con+128+bri));
+  let gam=Math.log(0.5)/Math.log(medS/255);
+  gam=Math.max(0.85,Math.min(1.15,Math.round(gam*20)/20));
+  // 彩度: 平均クロマが低い(くすんだ)写真ほど持ち上げる
+  const mc=chromaSum/N;
+  const satV= mc<25?1.5 : mc<60?1.3 : 1.1;
+  state.bright=bri; state.contrast=con; state.gamma=gam; state.sat=satV;
+  $("bright").value=bri;   $("brightVal").textContent=(bri>0?"+":"")+bri.toFixed(0);
+  $("contrast").value=con; $("contrastVal").textContent=con.toFixed(2);
+  $("gamma").value=gam;    $("gammaVal").textContent=gam.toFixed(2);
+  $("sat").value=satV;     $("satVal").textContent=satV.toFixed(2);
+  render();
+}
+$("autoBtn").onclick=autoAdjust;
 
 $("simBtn").onclick=()=>{
   state.sim=!state.sim;
