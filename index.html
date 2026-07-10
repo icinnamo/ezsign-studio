@@ -171,7 +171,7 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
       <button data-v="rgb" class="on">RGB判定</button>
       <button data-v="lab">Lab判定</button>
     </div>
-    <button class="toggle on" id="edgeBtn" style="flex:1">エッジ線 ON</button>
+    <button class="toggle" id="edgeBtn" style="flex:1">エッジ線 OFF</button>
   </div>
 
   <div class="slider">
@@ -206,7 +206,7 @@ input[type=range]{width:100%;margin-top:4px;accent-color:var(--red);height:28px}
     <label>暗部の黒固定 <b id="darkVal">30</b></label>
     <input type="range" id="dark" min="0" max="90" step="1" value="30">
   </div>
-  <div id="edgeSliders">
+  <div id="edgeSliders" style="opacity:0.4">
     <div class="slider">
       <label>面のまとまり (大=面が大きく統合) <b id="segTolVal">30</b></label>
       <input type="range" id="segTol" min="5" max="80" step="1" value="30">
@@ -340,7 +340,7 @@ const state = {
   img:null, rot:0, zoom:1, cx:0.5, cy:0.5,   // cx,cy=画像内の注視点(0-1)
   W:400, H:300, colors:4,
   dither:"atkinson", strength:0.8, sat:1.2, gamma:1.0,
-  dark:30, edges:true, edgeTh:45, segTol:30, edgeW:1, cs:"rgb",
+  dark:30, edges:false, edgeTh:45, segTol:30, edgeW:1, cs:"rgb",
   sim:false, showOrig:false, biasR:1.0, biasY:1.0, bright:0, contrast:1.0,
   remapRules:[], eyedropper:false, _preDitherBuf:null, _tapStart:null,
   _sampledHue:0, _sampledRange:28, _rangePreview:false, _srcBuf:null,
@@ -1349,10 +1349,10 @@ $("edgeBtn").onclick=()=>{
 
 /* プリセット */
 const PRESETS={
-  photo:{dither:"atkinson",strength:0.8,sat:1.2,gamma:1.0,dark:30,edges:true, cs:"rgb"},
+  photo:{dither:"atkinson",strength:0.8,sat:1.2,gamma:1.0,dark:30,edges:false,cs:"rgb"},
   flat: {dither:"none",    strength:0.0,sat:1.1,gamma:1.0,dark:30,edges:false,cs:"rgb"},
   retro:{dither:"bayer",   strength:0.4,sat:1.2,gamma:1.0,dark:30,edges:false,cs:"rgb"},
-  night:{dither:"fs",      strength:0.4,sat:1.5,gamma:1.0,dark:30,edges:true, cs:"rgb"},
+  night:{dither:"fs",      strength:0.4,sat:1.5,gamma:1.0,dark:30,edges:false,cs:"rgb"},
 };
 document.querySelectorAll(".chip").forEach(ch=>{
   ch.onclick=()=>{
